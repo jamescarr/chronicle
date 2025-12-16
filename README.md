@@ -1,94 +1,117 @@
 # Chronicle - Audit Logging System
 
-A demonstration of Enterprise Integration Patterns implemented in Gleam, specifically showcasing the **Point-to-Point Channel** pattern.
+A demonstration of Enterprise Integration Patterns implemented in Gleam, showcasing **Point-to-Point Channel** with **Competing Consumers**.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        HTTP Request                              │
-│                    POST /events (JSON)                          │
-└─────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                          API Layer                               │
-│                         (router.gleam)                          │
-│    - Parse JSON                                                 │
-│    - Generate ID & timestamp                                    │
-│    - Create AuditEvent                                          │
-└─────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼ actor.send(channel, event)
-┌─────────────────────────────────────────────────────────────────┐
-│                    Point-to-Point Channel                        │
-│                      (channel.gleam)                            │
-│                                                                 │
-│    An OTP Actor that acts as a queue:                          │
-│    - Receives messages via Send(event)                          │
-│    - Delivers to ONE consumer via Receive(reply_to)             │
-│    - FIFO ordering guaranteed                                   │
-│                                                                 │
-│    [Event1] → [Event2] → [Event3]                               │
-└─────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼ channel.receive(...)
-┌─────────────────────────────────────────────────────────────────┐
-│                         Consumer                                 │
-│                      (consumer.gleam)                           │
-│                                                                 │
-│    - Polls channel for events                                   │
-│    - Writes to ETS store                                        │
-│    - Single consumer = point-to-point                           │
-└─────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼ store.insert(...)
-┌─────────────────────────────────────────────────────────────────┐
-│                        ETS Store                                 │
-│                       (store.gleam)                             │
-│                                                                 │
-│    In-memory Erlang Term Storage                                │
-│    - Fast reads and writes                                      │
-│    - Keyed by event ID                                          │
-└─────────────────────────────────────────────────────────────────┘
+                    ┌─────────────────────────────────┐
+                    │         HTTP Requests           │
+                    │       POST /events (JSON)       │
+                    └───────────────┬─────────────────┘
+                                    │
+                                    ▼
+                    ┌─────────────────────────────────┐
+                    │           API Layer             │
+                    │         (router.gleam)          │
+                    │                                 │
+                    │  • Parse JSON                   │
+                    │  • Generate ID & timestamp      │
+                    │  • Send to channel              │
+                    └───────────────┬─────────────────┘
+                                    │
+                                    ▼ channel.send(event)
+                    ┌─────────────────────────────────┐
+                    │     Point-to-Point Channel      │
+                    │        (channel.gleam)          │
+                    │                                 │
+                    │  OTP Actor acting as a queue:   │
+                    │  • FIFO ordering                │
+                    │  • Each message → ONE consumer  │
+                    │                                 │
+                    │  [E1] → [E2] → [E3] → [E4]      │
+                    └───────────────┬─────────────────┘
+                                    │
+                 ┌──────────────────┼──────────────────┐
+                 │                  │                  │
+                 ▼                  ▼                  ▼
+        ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+        │ Consumer 1  │    │ Consumer 2  │    │ Consumer 3  │
+        │  <0.123.0>  │    │  <0.124.0>  │    │  <0.125.0>  │
+        └──────┬──────┘    └──────┬──────┘    └──────┬──────┘
+               │                  │                  │
+               │    Competing Consumers Pattern      │
+               │    Each races to grab messages      │
+               │                  │                  │
+               └──────────────────┼──────────────────┘
+                                  │
+                                  ▼ store.insert(event)
+                    ┌─────────────────────────────────┐
+                    │           ETS Store             │
+                    │         (store.gleam)           │
+                    │                                 │
+                    │  In-memory Erlang Term Storage  │
+                    │  • Concurrent read/write safe   │
+                    │  • Keyed by event ID            │
+                    └─────────────────────────────────┘
 ```
 
-## Enterprise Integration Pattern: Point-to-Point Channel
+## Enterprise Integration Patterns
 
-From the book *Enterprise Integration Patterns* by Gregor Hohpe and Bobby Woolf:
+Chronicle demonstrates two patterns from *Enterprise Integration Patterns* by Hohpe & Woolf:
+
+### Point-to-Point Channel
 
 > A Point-to-Point Channel ensures that only one receiver consumes any given message.
 
-In Chronicle:
 - The **Channel** actor is our Point-to-Point Channel
 - Messages (audit events) are queued in FIFO order
 - Each message is delivered to exactly **one** consumer
 - This guarantees no duplicate processing
+
+### Competing Consumers
+
+> Multiple consumers compete to receive messages from a single channel, enabling parallel processing.
+
+- **3 consumer actors** poll the same channel
+- They **race** to grab each message
+- Load is **distributed** across consumers
+- All write to the **same store** (ETS handles concurrency)
 
 ## Process-per-Request Model
 
 Chronicle runs on the BEAM (Erlang VM), which spawns a **new lightweight process for each HTTP request**. This is visible in the logs:
 
 ```
-INFO [<0.82.0>] Starting Chronicle...        # Main process
-INFO [<0.82.0>] Channel started              # Still main process
-INFO [<0.139.0>] Queued event abc-123...     # Request handler process
-INFO [<0.123.0>] Processing event abc-123... # Consumer actor
-INFO [<0.145.0>] Queued event def-456...     # Different request = new process
+INFO [<0.82.0>] Starting Chronicle...
+INFO [<0.82.0>] Starting consumer: consumer-1
+INFO [<0.82.0>] Starting consumer: consumer-2
+INFO [<0.82.0>] Starting consumer: consumer-3
+INFO [<0.82.0>] Started 3 competing consumers
+
+INFO [<0.141.0>] Queued event abc-123...
+INFO [<0.123.0>] [consumer-1] Processing abc-123 - create
+INFO [<0.142.0>] Queued event def-456...
+INFO [<0.124.0>] [consumer-2] Processing def-456 - update   ← different consumer!
+INFO [<0.143.0>] Queued event ghi-789...
+INFO [<0.125.0>] [consumer-3] Processing ghi-789 - delete   ← load distributed!
 ```
 
-Each PID (e.g., `<0.139.0>`) identifies a unique process:
+Each PID (e.g., `<0.123.0>`) identifies a unique process:
 
 | Process | Role | Lifecycle |
 |---------|------|-----------|
 | `<0.82.0>` | Main application | Persistent |
-| `<0.123.0>` | Consumer actor | Persistent |
-| `<0.139.0>`, `<0.145.0>`, ... | HTTP request handlers | Per-request |
+| `<0.123.0>` | Consumer 1 | Persistent |
+| `<0.124.0>` | Consumer 2 | Persistent |
+| `<0.125.0>` | Consumer 3 | Persistent |
+| `<0.141.0>`, `<0.142.0>`, ... | HTTP request handlers | Per-request |
 
 This architecture provides:
 - **Isolation** - if one request crashes, others are unaffected
 - **Concurrency** - thousands of requests handled simultaneously
 - **Fault tolerance** - embraces the "let it crash" philosophy
+- **Scalability** - add more consumers to increase throughput
 
 ## Quick Start
 
@@ -235,6 +258,7 @@ just dev          # Install, build, and run
 just fmt          # Format code
 just health       # Check server health
 just ingest       # Send a random event to the server
+just flood 20     # Send 20 events in parallel (test competing consumers)
 just list-events  # List all events from the server
 just run          # Start the server
 just test         # Run tests
