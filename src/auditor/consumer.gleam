@@ -4,10 +4,10 @@
 //// to exactly one consumer, ensuring no duplicate processing.
 
 import auditor/channel.{type ChannelMessage}
+import auditor/log
 import auditor/store.{type Table}
 import gleam/erlang/process.{type Subject}
 import gleam/otp/actor
-import logging
 
 /// Messages the consumer can receive
 pub type ConsumerMessage {
@@ -43,10 +43,7 @@ fn handle_message(
     Poll -> {
       case channel.receive(state.channel, 100) {
         Ok(event) -> {
-          logging.log(
-            logging.Info,
-            "Processing event " <> event.id <> " - " <> event.action,
-          )
+          log.info("Processing event " <> event.id <> " - " <> event.action)
           let _ = store.insert(state.store, event)
           actor.continue(state)
         }

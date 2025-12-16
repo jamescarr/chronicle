@@ -53,6 +53,23 @@ test-post:
         -H "Content-Type: application/json" \
         -d '{"actor":"test@example.com","action":"test","resource_type":"example","resource_id":"123"}' | jq .
 
+# Ingest a random event
+ingest:
+    #!/usr/bin/env bash
+    actors=("alice@acme.com" "bob@acme.com" "charlie@acme.com" "diana@acme.com" "eve@acme.com")
+    actions=("create" "update" "delete" "view" "export" "archive" "restore")
+    resources=("user" "document" "project" "invoice" "report" "team" "setting")
+    
+    actor=${actors[$RANDOM % ${#actors[@]}]}
+    action=${actions[$RANDOM % ${#actions[@]}]}
+    resource=${resources[$RANDOM % ${#resources[@]}]}
+    resource_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "id-$RANDOM")
+    
+    echo "Ingesting: $actor $action $resource/$resource_id"
+    curl -s -X POST http://localhost:8080/events \
+        -H "Content-Type: application/json" \
+        -d "{\"actor\":\"$actor\",\"action\":\"$action\",\"resource_type\":\"$resource\",\"resource_id\":\"$resource_id\"}" | jq .
+
 # GET all events from the running server
 test-get:
     @echo "Fetching events..."

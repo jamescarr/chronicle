@@ -5,6 +5,7 @@
 
 import auditor/channel
 import auditor/consumer
+import auditor/log
 import auditor/router.{Context}
 import auditor/store
 import gleam/erlang/process
@@ -17,11 +18,14 @@ pub fn main() -> Nil {
   logging.configure()
   logging.set_level(logging.Info)
 
-  logging.log(logging.Info, "Starting Chronicle...")
+  log.info("Starting Chronicle...")
 
   let table = store.init()
   let assert Ok(channel_started) = channel.start()
   let assert Ok(consumer_started) = consumer.start(channel_started.data, table)
+
+  log.info("Channel started")
+  log.info("Consumer started")
 
   let ctx =
     Context(
@@ -40,10 +44,10 @@ pub fn main() -> Nil {
     |> mist.port(8080)
     |> mist.start
 
-  logging.log(logging.Info, "Chronicle running at http://localhost:8080")
-  logging.log(logging.Info, "  POST /events  - Create audit event")
-  logging.log(logging.Info, "  GET  /events  - List all events")
-  logging.log(logging.Info, "  GET  /health  - Health check")
+  log.info("Chronicle running at http://localhost:8080")
+  log.info("  POST /events  - Create audit event")
+  log.info("  GET  /events  - List all events")
+  log.info("  GET  /health  - Health check")
 
   process.sleep_forever()
 }

@@ -6,6 +6,7 @@
 import auditor/channel.{type ChannelMessage}
 import auditor/consumer
 import auditor/event
+import auditor/log
 import auditor/store.{type Table}
 import birl
 import gleam/dynamic/decode
@@ -13,7 +14,6 @@ import gleam/erlang/process.{type Subject}
 import gleam/http.{Get, Post}
 import gleam/json
 import gleam/list
-import logging
 import wisp.{type Request as WispRequest, type Response as WispResponse}
 import youid/uuid
 
@@ -70,7 +70,7 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
       channel.send(ctx.channel, audit_event)
       consumer.poll(ctx.consumer)
 
-      logging.log(logging.Info, "Queued event " <> id)
+      log.info("Queued event " <> id)
 
       wisp.response(202)
       |> wisp.json_body(
