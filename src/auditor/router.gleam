@@ -1,15 +1,21 @@
-/// HTTP Router - handles incoming requests
+//// HTTP Router - handles incoming audit event requests
+////
+//// Provides a REST API for creating and listing audit events.
+//// Events are sent through a Point-to-Point Channel for async processing.
+
 import auditor/channel.{type ChannelMessage}
 import auditor/consumer
 import auditor/event
 import auditor/store.{type Table}
+import birl
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
 import gleam/http.{Get, Post}
-import gleam/io
 import gleam/json
 import gleam/list
+import logging
 import wisp.{type Request as WispRequest, type Response as WispResponse}
+import youid/uuid
 
 /// Context passed to request handlers
 pub type Context {
@@ -45,7 +51,6 @@ fn handle_events(req: WispRequest, ctx: Context) -> WispResponse {
 fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
   use body <- wisp.require_string_body(req)
 
-  // Define the decoder for incoming event JSON
   let decoder = {
     use actor <- decode.field("actor", decode.string)
     use action <- decode.field("action", decode.string)
@@ -56,22 +61,17 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
 
   case json.parse(body, decoder) {
     Ok(#(actor, action, resource_type, resource_id)) -> {
-      // Generate ID and timestamp
-      let id = generate_id()
-      let timestamp = get_timestamp()
+      let id = uuid.v4_string()
+      let timestamp = birl.utc_now() |> birl.to_iso8601
 
       let audit_event =
         event.new(id, actor, action, resource_type, resource_id, timestamp)
 
-      // Send to channel (async!)
       channel.send(ctx.channel, audit_event)
-
-      // Trigger consumer to process
       consumer.poll(ctx.consumer)
 
-      io.println("API: Queued event " <> id)
+      logging.log(logging.Info, "Queued event " <> id)
 
-      // Return 202 Accepted - event is queued, not yet processed
       wisp.response(202)
       |> wisp.json_body(
         json.to_string(
@@ -85,9 +85,7 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
     Error(_) -> {
       wisp.bad_request("Invalid JSON format")
       |> wisp.json_body(
-        json.to_string(
-          json.object([#("error", json.string("Invalid JSON"))]),
-        ),
+        json.to_string(json.object([#("error", json.string("Invalid JSON"))])),
       )
     }
   }
@@ -113,11 +111,3 @@ fn health_check() -> WispResponse {
     json.to_string(json.object([#("status", json.string("healthy"))])),
   )
 }
-
-/// Generate a simple UUID-ish ID
-@external(erlang, "auditor_router_ffi", "generate_id")
-fn generate_id() -> String
-
-/// Get current timestamp as ISO string
-@external(erlang, "auditor_router_ffi", "get_timestamp")
-fn get_timestamp() -> String

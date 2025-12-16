@@ -1,18 +1,22 @@
-/// ETS-based event store - simple in-memory persistence
+//// ETS-based event store
+////
+//// Simple in-memory persistence using Erlang Term Storage.
+//// Events are stored in a set keyed by their ID.
+
 import auditor/event.{type AuditEvent}
 
-/// The ETS table reference type
+/// Opaque ETS table reference
 pub type Table
 
-/// Initialize the ETS table for storing events
+/// Initialize a new ETS table
 @external(erlang, "auditor_store_ffi", "init")
 pub fn init() -> Table
 
-/// Store an event in ETS
+/// Insert an event into the store
 @external(erlang, "auditor_store_ffi", "insert")
 pub fn insert(table: Table, event: AuditEvent) -> Bool
 
-/// List all events from ETS
+/// List all events in the store
 @external(erlang, "auditor_store_ffi", "list_all")
 pub fn list_all(table: Table) -> List(AuditEvent)
 

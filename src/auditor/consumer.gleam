@@ -1,16 +1,17 @@
-/// Consumer - reads from channel and writes to store
-/// This demonstrates the Point-to-Point pattern: one consumer per message
+//// Consumer - reads from channel and writes to store
+////
+//// Demonstrates the Point-to-Point pattern: each message is delivered
+//// to exactly one consumer, ensuring no duplicate processing.
+
 import auditor/channel.{type ChannelMessage}
 import auditor/store.{type Table}
 import gleam/erlang/process.{type Subject}
-import gleam/io
 import gleam/otp/actor
+import logging
 
-/// Consumer messages
+/// Messages the consumer can receive
 pub type ConsumerMessage {
-  /// Process the next message from the channel
   Poll
-  /// Stop the consumer
   Stop
 }
 
@@ -34,33 +35,24 @@ pub fn poll(consumer: Subject(ConsumerMessage)) -> Nil {
   actor.send(consumer, Poll)
 }
 
-/// Handle consumer messages
 fn handle_message(
   state: ConsumerState,
   message: ConsumerMessage,
 ) -> actor.Next(ConsumerState, ConsumerMessage) {
   case message {
     Poll -> {
-      // Try to receive from the channel
       case channel.receive(state.channel, 100) {
         Ok(event) -> {
-          // Got an event, store it
-          io.println(
-            "Consumer: Processing event " <> event.id <> " - " <> event.action,
+          logging.log(
+            logging.Info,
+            "Processing event " <> event.id <> " - " <> event.action,
           )
           let _ = store.insert(state.store, event)
-          // Continue accepting messages
           actor.continue(state)
         }
-        Error(Nil) -> {
-          // No event available
-          actor.continue(state)
-        }
+        Error(Nil) -> actor.continue(state)
       }
     }
-
-    Stop -> {
-      actor.stop()
-    }
+    Stop -> actor.stop()
   }
 }

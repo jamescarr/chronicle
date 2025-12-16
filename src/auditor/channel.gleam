@@ -1,21 +1,22 @@
-/// Point-to-Point Channel - OTP actor-based message queue
-/// Each message is delivered to exactly one consumer
+//// Point-to-Point Channel - OTP actor-based message queue
+////
+//// Implements the Point-to-Point Channel pattern from Enterprise Integration
+//// Patterns. Each message is delivered to exactly one consumer, ensuring
+//// no duplicate processing.
+
 import auditor/event.{type AuditEvent}
 import gleam/erlang/process.{type Subject}
 import gleam/list
 import gleam/otp/actor
 
-/// Messages that can be sent to the channel
+/// Messages the channel accepts
 pub type ChannelMessage {
-  /// Send an event to the channel
   Send(event: AuditEvent)
-  /// Request to receive an event (with reply subject)
   Receive(reply_to: Subject(Result(AuditEvent, Nil)))
-  /// Get the current queue length
   QueueLength(reply_to: Subject(Int))
 }
 
-/// Channel state - just a queue of events
+/// Channel state - a FIFO queue of events
 pub type ChannelState {
   ChannelState(queue: List(AuditEvent))
 }
@@ -27,7 +28,7 @@ pub fn start() -> Result(actor.Started(Subject(ChannelMessage)), actor.StartErro
   |> actor.start
 }
 
-/// Send an event to the channel
+/// Send an event to the channel (async, fire-and-forget)
 pub fn send(channel: Subject(ChannelMessage), event: AuditEvent) -> Nil {
   actor.send(channel, Send(event))
 }
@@ -40,19 +41,17 @@ pub fn receive(
   actor.call(channel, timeout_ms, Receive)
 }
 
-/// Get the queue length
+/// Get the current queue length
 pub fn queue_length(channel: Subject(ChannelMessage), timeout_ms: Int) -> Int {
   actor.call(channel, timeout_ms, QueueLength)
 }
 
-/// Handle incoming messages
 fn handle_message(
   state: ChannelState,
   message: ChannelMessage,
 ) -> actor.Next(ChannelState, ChannelMessage) {
   case message {
     Send(event) -> {
-      // Add to the end of the queue
       let new_queue = list.append(state.queue, [event])
       actor.continue(ChannelState(queue: new_queue))
     }
@@ -60,12 +59,10 @@ fn handle_message(
     Receive(reply_to) -> {
       case state.queue {
         [] -> {
-          // No events available
           process.send(reply_to, Error(Nil))
           actor.continue(state)
         }
         [first, ..rest] -> {
-          // Return the first event, remove from queue
           process.send(reply_to, Ok(first))
           actor.continue(ChannelState(queue: rest))
         }

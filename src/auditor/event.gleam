@@ -1,6 +1,9 @@
-/// Audit event type - represents something that happened in the system
+//// Audit Event - the core message type
+////
+//// Represents an action performed by an actor on a resource.
+//// This is the "Message" in EIP terminology.
+
 import gleam/json.{type Json}
-import gleam/option.{type Option, None}
 
 /// An audit event capturing who did what to which resource
 pub type AuditEvent {
@@ -11,8 +14,19 @@ pub type AuditEvent {
     resource_type: String,
     resource_id: String,
     timestamp: String,
-    metadata: Option(String),
   )
+}
+
+/// Create a new audit event
+pub fn new(
+  id: String,
+  actor: String,
+  action: String,
+  resource_type: String,
+  resource_id: String,
+  timestamp: String,
+) -> AuditEvent {
+  AuditEvent(id:, actor:, action:, resource_type:, resource_id:, timestamp:)
 }
 
 /// Encode an audit event to JSON
@@ -25,24 +39,4 @@ pub fn to_json(event: AuditEvent) -> Json {
     #("resource_id", json.string(event.resource_id)),
     #("timestamp", json.string(event.timestamp)),
   ])
-}
-
-/// Create an audit event with required fields
-pub fn new(
-  id: String,
-  actor: String,
-  action: String,
-  resource_type: String,
-  resource_id: String,
-  timestamp: String,
-) -> AuditEvent {
-  AuditEvent(
-    id: id,
-    actor: actor,
-    action: action,
-    resource_type: resource_type,
-    resource_id: resource_id,
-    timestamp: timestamp,
-    metadata: None,
-  )
 }
