@@ -22,7 +22,10 @@ pub type ChannelState {
 }
 
 /// Start the channel actor
-pub fn start() -> Result(actor.Started(Subject(ChannelMessage)), actor.StartError) {
+pub fn start() -> Result(
+  actor.Started(Subject(ChannelMessage)),
+  actor.StartError,
+) {
   actor.new(ChannelState(queue: []))
   |> actor.on_message(handle_message)
   |> actor.start

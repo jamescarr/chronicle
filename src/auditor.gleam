@@ -21,8 +21,7 @@ pub fn main() -> Nil {
 
   let table = store.init()
   let assert Ok(channel_started) = channel.start()
-  let assert Ok(consumer_started) =
-    consumer.start(channel_started.data, table)
+  let assert Ok(consumer_started) = consumer.start(channel_started.data, table)
 
   let ctx =
     Context(
