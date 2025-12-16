@@ -14,6 +14,7 @@ import gleam/httpc
 import gleam/json
 import gleam/list
 import gleam/string
+import gleeunit/should
 import mist
 import wisp
 import wisp/wisp_mist
@@ -49,18 +50,17 @@ fn start_test_server() -> Nil {
 }
 
 /// Helper to make GET requests
-fn get(path: String) -> Result(#(Int, String), httpc.HttpError) {
+fn get(path: String) -> #(Int, String) {
   let assert Ok(req) = request.to(base_url <> path)
   let req = request.set_header(req, "accept", "application/json")
 
-  case httpc.send(req) {
-    Ok(response) -> Ok(#(response.status, response.body))
-    Error(e) -> Error(e)
-  }
+  httpc.send(req)
+  |> should.be_ok
+  |> fn(resp) { #(resp.status, resp.body) }
 }
 
 /// Helper to make POST requests with JSON body
-fn post(path: String, body: String) -> Result(#(Int, String), httpc.HttpError) {
+fn post(path: String, body: String) -> #(Int, String) {
   let assert Ok(req) = request.to(base_url <> path)
   let req =
     req
@@ -68,14 +68,30 @@ fn post(path: String, body: String) -> Result(#(Int, String), httpc.HttpError) {
     |> request.set_header("content-type", "application/json")
     |> request.set_body(body)
 
-  case httpc.send(req) {
-    Ok(response) -> Ok(#(response.status, response.body))
-    Error(e) -> Error(e)
-  }
+  httpc.send(req)
+  |> should.be_ok
+  |> fn(resp) { #(resp.status, resp.body) }
+}
+
+/// Build event JSON from components
+fn event_json(
+  actor: String,
+  action: String,
+  resource_type: String,
+  resource_id: String,
+) -> String {
+  json.to_string(
+    json.object([
+      #("actor", json.string(actor)),
+      #("action", json.string(action)),
+      #("resource_type", json.string(resource_type)),
+      #("resource_id", json.string(resource_id)),
+    ]),
+  )
 }
 
 // =============================================================================
-// Single E2E test that runs all scenarios
+// E2E Test
 // =============================================================================
 
 pub fn e2e_full_api_test() {
@@ -84,80 +100,63 @@ pub fn e2e_full_api_test() {
   process.sleep(100)
 
   // Test 1: Health check
-  let assert Ok(#(status, body)) = get("/health")
-  let assert 200 = status
-  let assert True = string.contains(body, "healthy")
+  let #(status, body) = get("/health")
+  status |> should.equal(200)
+  body |> string.contains("healthy") |> should.be_true
 
-  // Test 2: Create an event and verify it's returned
-  let event_json =
-    json.to_string(
-      json.object([
-        #("actor", json.string("test@example.com")),
-        #("action", json.string("create")),
-        #("resource_type", json.string("document")),
-        #("resource_id", json.string("doc-123")),
-      ]),
+  // Test 2: Create an event
+  let #(create_status, create_body) =
+    post(
+      "/events",
+      event_json("test@example.com", "create", "document", "doc-123"),
     )
 
-  let assert Ok(#(create_status, create_body)) = post("/events", event_json)
-  let assert 202 = create_status
+  create_status |> should.equal(202)
+  create_body |> string.contains("accepted") |> should.be_true
 
-  // Parse the response to get the ID
-  let id_decoder = {
-    use id <- decode.field("id", decode.string)
-    decode.success(id)
-  }
-  let assert Ok(event_id) = json.parse(create_body, id_decoder)
+  // Parse the event ID from response
+  let id_decoder = decode.field("id", decode.string, decode.success)
+  let event_id =
+    json.parse(create_body, id_decoder)
+    |> should.be_ok
 
   // Small delay for async processing
   process.sleep(50)
 
   // Test 3: List events and verify our event is there
-  let assert Ok(#(list_status, list_body)) = get("/events")
-  let assert 200 = list_status
-  let assert True = string.contains(list_body, event_id)
-  let assert True = string.contains(list_body, "test@example.com")
-  let assert True = string.contains(list_body, "create")
-  let assert True = string.contains(list_body, "document")
-  let assert True = string.contains(list_body, "doc-123")
+  let #(list_status, list_body) = get("/events")
+  list_status |> should.equal(200)
+  list_body |> string.contains(event_id) |> should.be_true
+  list_body |> string.contains("test@example.com") |> should.be_true
+  list_body |> string.contains("create") |> should.be_true
+  list_body |> string.contains("document") |> should.be_true
+  list_body |> string.contains("doc-123") |> should.be_true
 
   // Test 4: Create multiple events
-  let events = [
+  [
     #("alice@example.com", "read", "file", "file-1"),
     #("bob@example.com", "update", "file", "file-1"),
   ]
-
-  list.each(events, fn(event) {
-    let #(actor, action, resource_type, resource_id) = event
-    let json_body =
-      json.to_string(
-        json.object([
-          #("actor", json.string(actor)),
-          #("action", json.string(action)),
-          #("resource_type", json.string(resource_type)),
-          #("resource_id", json.string(resource_id)),
-        ]),
-      )
-
-    let assert Ok(#(s, _)) = post("/events", json_body)
-    let assert 202 = s
+  |> list.each(fn(e) {
+    let #(actor, action, resource_type, resource_id) = e
+    let #(s, _) =
+      post("/events", event_json(actor, action, resource_type, resource_id))
+    s |> should.equal(202)
   })
 
   process.sleep(100)
 
   // Verify all events are listed
-  let assert Ok(#(_, all_body)) = get("/events")
-  let assert True = string.contains(all_body, "alice@example.com")
-  let assert True = string.contains(all_body, "bob@example.com")
+  let #(_, all_body) = get("/events")
+  all_body |> string.contains("alice@example.com") |> should.be_true
+  all_body |> string.contains("bob@example.com") |> should.be_true
 
   // Test 5: Invalid JSON returns 400
   let invalid_json = json.to_string(json.object([#("actor", json.string("x"))]))
-  let assert Ok(#(bad_status, _)) = post("/events", invalid_json)
-  let assert 400 = bad_status
+  let #(bad_status, _) = post("/events", invalid_json)
+  bad_status |> should.equal(400)
 
   // Test 6: Not found returns 404
-  let assert Ok(#(not_found_status, _)) = get("/nonexistent")
-  let assert 404 = not_found_status
-
-  Nil
+  let #(not_found_status, _) = get("/nonexistent")
+  not_found_status |> should.equal(404)
 }
