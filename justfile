@@ -75,6 +75,10 @@ test-get:
     @echo "Fetching events..."
     @curl -s http://localhost:8080/events | jq .
 
+# List all events
+list-events:
+    @curl -s http://localhost:8080/events | jq .
+
 # Health check
 health:
     @curl -s http://localhost:8080/health | jq .
