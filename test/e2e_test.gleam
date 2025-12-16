@@ -27,14 +27,10 @@ const base_url = "http://localhost:9999"
 fn start_test_server() -> Nil {
   let table = store.init()
   let assert Ok(channel_started) = channel.start()
-  let assert Ok(consumer_started) = consumer.start(channel_started.data, table)
+  let consumers = consumer.start_pool(2, channel_started.data, table)
 
   let ctx =
-    Context(
-      channel: channel_started.data,
-      store: table,
-      consumer: consumer_started.data,
-    )
+    Context(channel: channel_started.data, store: table, consumers: consumers)
 
   let secret_key_base = wisp.random_string(64)
   let handler = fn(req) { router.handle_request(req, ctx) }

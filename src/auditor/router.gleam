@@ -22,7 +22,7 @@ pub type Context {
   Context(
     channel: Subject(ChannelMessage),
     store: Table,
-    consumer: Subject(consumer.ConsumerMessage),
+    consumers: List(Subject(consumer.ConsumerMessage)),
   )
 }
 
@@ -68,7 +68,7 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
         event.new(id, actor, action, resource_type, resource_id, timestamp)
 
       channel.send(ctx.channel, audit_event)
-      consumer.poll(ctx.consumer)
+      consumer.poll_all(ctx.consumers)
 
       log.info("Queued event " <> id)
 
