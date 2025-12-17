@@ -1,67 +1,117 @@
 # Chronicle - Audit Logging System
 # Run `just` to see available commands
 
+# Transport adapter: "otp" (default) or "rabbitmq"
+transport := env("CHRONICLE_TRANSPORT", "otp")
+
 # Default: show available commands
 default:
-    @just --list
+    @just --list --unsorted
 
-# Install dependencies
+# =============================================================================
+# Build & Test
+# =============================================================================
+
+[group('build')]
 deps:
     gleam deps download
 
-# Build the project
+[group('build')]
 build:
     gleam build
 
-# Run all tests
+[group('build')]
 test:
     gleam test
 
-# Run the server (full mode - producer + consumer)
-run:
-    gleam run
-
-# Run as producer only (HTTP API, publishes to channel)
-run-producer:
-    CHRONICLE_MODE=producer gleam run
-
-# Run as consumer only (subscribes to channel, stores events)
-run-consumer:
-    CHRONICLE_MODE=consumer gleam run
-
-# Run the server in watch mode (rebuilds on changes)
-watch:
-    watchexec -e gleam -r -- gleam run
-
-# Format code
+[group('build')]
 fmt:
     gleam format
 
-# Check formatting without making changes
+[group('build')]
 fmt-check:
     gleam format --check
 
-# Clean build artifacts
+[group('build')]
 clean:
     rm -rf build
 
-# Bootstrap: clean, install deps, and build
+[group('build')]
 bootstrap: clean deps build
 
-# Full check: format, build, and test
+[group('build')]
 check: fmt build test
 
-# Development setup: install deps, build, run
+# =============================================================================
+# Run
+# =============================================================================
+
+[group('run')]
+run:
+    CHRONICLE_TRANSPORT={{transport}} gleam run
+
+[group('run')]
+producer:
+    CHRONICLE_TRANSPORT={{transport}} CHRONICLE_MODE=producer gleam run
+
+[group('run')]
+consumer:
+    CHRONICLE_TRANSPORT={{transport}} CHRONICLE_MODE=consumer gleam run
+
+[group('run')]
+watch:
+    CHRONICLE_TRANSPORT={{transport}} watchexec -e gleam -r -- gleam run
+
+[group('run')]
 dev: deps build run
 
-# POST a test event to the running server
-test-post:
+[group('run')]
+kill:
+    @pkill -f "gleam run" 2>/dev/null || true
+    @pkill -f beam.smp 2>/dev/null || true
+    @lsof -ti:8080 | xargs kill -9 2>/dev/null || true
+    @echo "Chronicle stopped"
+
+# =============================================================================
+# Transport Shortcuts
+# =============================================================================
+
+[group('transport')]
+otp:
+    CHRONICLE_TRANSPORT=otp gleam run
+
+[group('transport')]
+rabbit:
+    CHRONICLE_TRANSPORT=rabbitmq gleam run
+
+[group('transport')]
+which-transport:
+    @echo "Current transport: {{transport}}"
+    @echo ""
+    @echo "To change, either:"
+    @echo "  export CHRONICLE_TRANSPORT=rabbitmq"
+    @echo "  just transport=rabbitmq run"
+
+# =============================================================================
+# API Testing
+# =============================================================================
+
+[group('api')]
+health:
+    @curl -s http://localhost:8080/health | jq .
+
+[group('api')]
+post:
     @echo "Sending test event..."
     @curl -s -X POST http://localhost:8080/events \
         -H "Content-Type: application/json" \
         -d '{"actor":"test@example.com","action":"test","resource_type":"example","resource_id":"123"}' | jq .
 
-# Ingest a random event
+[group('api')]
+events:
+    @curl -s http://localhost:8080/events | jq .
+
+[group('api')]
 ingest:
     #!/usr/bin/env bash
     actors=("alice@acme.com" "bob@acme.com" "charlie@acme.com" "diana@acme.com" "eve@acme.com")
@@ -78,16 +128,7 @@ ingest:
         -H "Content-Type: application/json" \
         -d "{\"actor\":\"$actor\",\"action\":\"$action\",\"resource_type\":\"$resource\",\"resource_id\":\"$resource_id\"}" | jq .
 
-# GET all events from the running server
-test-get:
-    @echo "Fetching events..."
-    @curl -s http://localhost:8080/events | jq .
-
-# List all events
-list-events:
-    @curl -s http://localhost:8080/events | jq .
-
-# Flood the server with random events (demonstrates competing consumers)
+[group('api')]
 flood count="20":
     #!/usr/bin/env bash
     actors=("alice@acme.com" "bob@acme.com" "charlie@acme.com" "diana@acme.com" "eve@acme.com")
@@ -100,7 +141,6 @@ flood count="20":
         resource=${resources[$RANDOM % ${#resources[@]}]}
         resource_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "id-$RANDOM")
         
-        # Fire and forget - don't wait for response
         curl -s -X POST http://localhost:8080/events \
             -H "Content-Type: application/json" \
             -d "{\"actor\":\"$actor\",\"action\":\"$action\",\"resource_type\":\"$resource\",\"resource_id\":\"$resource_id\"}" &
@@ -108,59 +148,50 @@ flood count="20":
     wait
     echo "Sent {{count}} events"
 
-# Health check
-health:
-    @curl -s http://localhost:8080/health | jq .
+# =============================================================================
+# RabbitMQ Infrastructure
+# =============================================================================
 
-# Show project info
+[group('rabbitmq')]
+rabbit-up:
+    docker-compose up -d
+    @echo "RabbitMQ starting..."
+    @echo "Management UI: http://localhost:15672 (guest/guest)"
+
+[group('rabbitmq')]
+rabbit-down:
+    docker-compose down
+
+[group('rabbitmq')]
+rabbit-logs:
+    docker-compose logs -f rabbitmq
+
+[group('rabbitmq')]
+rabbit-status:
+    @docker-compose ps
+    @echo ""
+    @echo "Queue status:"
+    @curl -s -u guest:guest http://localhost:15672/api/queues/%2F/chronicle.events 2>/dev/null \
+        | jq '{name: .name, messages: .messages, consumers: .consumers}' \
+        || echo "Queue not found or RabbitMQ not running"
+
+[group('rabbitmq')]
+rabbit-clean:
+    docker-compose down -v
+    @echo "RabbitMQ data cleaned"
+
+# =============================================================================
+# Info
+# =============================================================================
+
+[group('info')]
 info:
     @echo "Chronicle - Audit Logging System"
+    @echo ""
+    @echo "Current transport: {{transport}}"
     @echo ""
     @echo "Gleam version:"
     @gleam --version
     @echo ""
     @echo "Project structure:"
     @ls -la src/auditor/
-
-# =============================================================================
-# RabbitMQ Commands
-# =============================================================================
-
-# Start RabbitMQ via Docker Compose
-rabbit-up:
-    docker-compose up -d
-    @echo "RabbitMQ starting..."
-    @echo "Management UI: http://localhost:15672 (guest/guest)"
-
-# Stop RabbitMQ
-rabbit-down:
-    docker-compose down
-
-# Show RabbitMQ logs
-rabbit-logs:
-    docker-compose logs -f rabbitmq
-
-# Check RabbitMQ status
-rabbit-status:
-    @docker-compose ps
-    @echo ""
-    @echo "Queue status:"
-    @curl -s -u guest:guest http://localhost:15672/api/queues/%2F/chronicle.events 2>/dev/null | jq '{name: .name, messages: .messages, consumers: .consumers}' || echo "Queue not found or RabbitMQ not running"
-
-# Run with RabbitMQ transport (full mode)
-run-rabbit:
-    CHRONICLE_TRANSPORT=rabbitmq gleam run
-
-# Run RabbitMQ producer only (HTTP API, publishes to queue)
-run-rabbit-producer:
-    CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=producer gleam run
-
-# Run RabbitMQ consumer only (subscribes to queue, stores events)
-run-rabbit-consumer:
-    CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=consumer gleam run
-
-# Clean RabbitMQ data
-rabbit-clean:
-    docker-compose down -v
-    @echo "RabbitMQ data cleaned"
-
