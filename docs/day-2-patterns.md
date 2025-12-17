@@ -228,6 +228,63 @@ flowchart TB
 
 ---
 
+## Pipes and Filters
+
+Divides processing into composable, independent steps connected by channels.
+
+```mermaid
+flowchart LR
+    subgraph Input
+        REQ[HTTP Request]
+    end
+    
+    subgraph Pipeline["Processing Pipeline"]
+        F1["validate_required()"]
+        F2["trim_fields()"]
+        F3["normalize_actor()"]
+        F4["add_correlation_id()"]
+        F5["enrich_from_entity()"]
+    end
+    
+    subgraph Registry
+        ES[("Entity Store")]
+    end
+    
+    subgraph Output
+        GW[Gateway]
+    end
+    
+    REQ -->|raw event| F1
+    F1 -->|pipe| F2
+    F2 -->|pipe| F3
+    F3 -->|pipe| F4
+    F4 -->|pipe| F5
+    F5 -->|enriched| GW
+    
+    ES -.->|lookup| F5
+    
+    style F1 fill:#fbb
+    style F2 fill:#fbf
+    style F3 fill:#bfb
+    style F4 fill:#bbf
+    style F5 fill:#ff9
+    style ES fill:#9cf
+```
+
+**Key Properties:**
+- Each filter is independent and reusable
+- Filters can validate, transform, or enrich
+- Pipeline can reject events that fail validation
+- Entity enrichment adds metadata from registered entities
+
+**Filter Types:**
+- **Validation**: `validate_required()`, `validate_actor_email()`
+- **Normalization**: `normalize_actor()`, `trim_fields()`
+- **Enrichment**: `add_correlation_id()`, `enrich_from_entity()`
+- **Logging**: `log_event()`, `log_debug()`
+
+---
+
 ## Pattern Relationships
 
 How the patterns work together:
@@ -253,6 +310,11 @@ mindmap
       Parallel Processing
       Load Distribution
       Exactly-once Delivery
+    Pipes and Filters
+      Composable Processing
+      Validation Filters
+      Enrichment Filters
+      Entity Registry
 ```
 
 ---
@@ -264,4 +326,5 @@ mindmap
 - [Messaging Gateway](https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessagingGateway.html)
 - [Message Endpoint](https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageEndpoint.html)
 - [Competing Consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html)
+- [Pipes and Filters](https://www.enterpriseintegrationpatterns.com/patterns/messaging/PipesAndFilters.html)
 
