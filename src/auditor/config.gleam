@@ -177,4 +177,3 @@ pub fn rabbitmq_connection_string(rabbit: RabbitConfig) -> String {
   <> int.to_string(rabbit.port)
   <> rabbit.vhost
 }
-

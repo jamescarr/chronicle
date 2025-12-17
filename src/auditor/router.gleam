@@ -7,14 +7,12 @@
 //// whether events go to OTP actors or RabbitMQ. It just calls
 //// gateway.send_event() and the abstraction handles the rest.
 
-import auditor/consumer
 import auditor/event
-import auditor/gateway.{type Gateway}
+import auditor/gateway.{type ConsumerPool, type Gateway}
 import auditor/log
 import auditor/store.{type Table}
 import birl
 import gleam/dynamic/decode
-import gleam/erlang/process.{type Subject}
 import gleam/http.{Get, Post}
 import gleam/json
 import gleam/list
@@ -26,7 +24,7 @@ pub type Context {
   Context(
     gateway: Gateway,
     store: Table,
-    consumers: List(Subject(consumer.ConsumerMessage)),
+    consumer_pool: Result(ConsumerPool, Nil),
   )
 }
 
@@ -74,8 +72,11 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
       // Send through the gateway - doesn't matter if it's OTP or RabbitMQ!
       gateway.send_event(ctx.gateway, audit_event)
 
-      // Poll consumers (only applicable in OTP mode)
-      consumer.poll_all(ctx.consumers)
+      // Notify consumers - gateway handles the transport-specific details
+      case ctx.consumer_pool {
+        Ok(pool) -> gateway.notify_consumers(pool)
+        Error(_) -> Nil
+      }
 
       log.info("Queued event " <> id)
 

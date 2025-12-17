@@ -96,7 +96,9 @@ pub fn publish(conn: RabbitConnection, event: AuditEvent) -> Result(Nil, String)
       publisher.MessageId(event.id),
     ],
   )
-  |> result.map_error(fn(e) { "Failed to publish: " <> carotte_error_to_string(e) })
+  |> result.map_error(fn(e) {
+    "Failed to publish: " <> carotte_error_to_string(e)
+  })
 }
 
 /// Subscribe to the queue and process events with a callback

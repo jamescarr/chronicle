@@ -3,7 +3,6 @@
 //// These tests start a real server and make HTTP requests to verify behavior.
 
 import auditor/config
-import auditor/consumer
 import auditor/gateway
 import auditor/router.{Context}
 import auditor/store
@@ -14,6 +13,7 @@ import gleam/http/request
 import gleam/httpc
 import gleam/json
 import gleam/list
+import gleam/result
 import gleam/string
 import gleeunit/should
 import mist
@@ -32,14 +32,17 @@ fn start_test_server() -> Nil {
   let cfg = config.load()
   let assert Ok(gateway_result) = gateway.start(cfg)
 
-  // Start consumers if using OTP transport
-  let consumers = case gateway.get_otp_channel(gateway_result.gateway) {
-    Ok(channel) -> consumer.start_pool(2, channel, table)
-    Error(_) -> []
-  }
+  // Start consumers through the gateway - clean abstraction!
+  let consumer_pool =
+    gateway.start_consumers(gateway_result.gateway, 2, table)
+    |> result.replace_error(Nil)
 
   let ctx =
-    Context(gateway: gateway_result.gateway, store: table, consumers: consumers)
+    Context(
+      gateway: gateway_result.gateway,
+      store: table,
+      consumer_pool: consumer_pool,
+    )
 
   let secret_key_base = wisp.random_string(64)
   let handler = fn(req) { router.handle_request(req, ctx) }

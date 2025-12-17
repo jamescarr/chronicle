@@ -4,21 +4,18 @@
 //// specifically the Point-to-Point Channel pattern with Competing Consumers,
 //// wrapped in a Messaging Gateway for transport abstraction.
 ////
-//// Supports configurable Messaging Endpoint modes:
-//// - Full: both produces and consumes (default)
-//// - Producer: HTTP API only, publishes to channel
-//// - Consumer: subscribes to channel, stores events
+//// The Messaging Gateway hides all transport complexity:
+//// - Client code doesn't know if we're using OTP or RabbitMQ
+//// - Consumer lifecycle is managed through the gateway
+//// - Same code works for both local and distributed deployments
 
 import auditor/config
-import auditor/consumer
 import auditor/gateway
 import auditor/log
 import auditor/router.{Context}
 import auditor/store
 import gleam/erlang/process
 import gleam/int
-import gleam/list
-import gleam/option.{None, Some}
 import logging
 import mist
 import wisp
@@ -35,73 +32,50 @@ pub fn main() -> Nil {
   log.info("Transport: " <> config.transport_name(cfg.transport))
   log.info("Mode: " <> config.mode_name(cfg.mode))
 
-  // Initialize storage (consumers need it to store events)
-  let table = case config.is_consumer(cfg) {
-    True -> Some(store.init())
-    False -> None
-  }
-
-  // Start the messaging gateway
+  // Start the messaging gateway - abstracts OTP vs RabbitMQ
   let assert Ok(gateway_result) = gateway.start(cfg)
   log.info("Gateway started: " <> gateway_result.transport_name)
 
+  // Initialize storage (only needed if we're consuming)
+  let store = store.init()
+
   // Start consumers if this endpoint is configured as a consumer
-  let consumers = case config.is_consumer(cfg) {
+  // The gateway handles all transport-specific details!
+  let consumer_pool = case config.is_consumer(cfg) {
     False -> {
       log.info("Producer mode: not starting consumers")
-      []
+      Error(Nil)
     }
     True -> {
-      case gateway.is_distributed(gateway_result.gateway) {
-        False -> {
-          // OTP mode: start local competing consumers
-          case gateway.get_otp_channel(gateway_result.gateway), table {
-            Ok(channel), Some(st) -> {
-              let consumers =
-                consumer.start_pool(cfg.consumer_count, channel, st)
-              log.info(
-                "Started "
-                <> int.to_string(list.length(consumers))
-                <> " competing consumers",
-              )
-              consumers
-            }
-            _, _ -> []
-          }
+      case
+        gateway.start_consumers(
+          gateway_result.gateway,
+          cfg.consumer_count,
+          store,
+        )
+      {
+        Ok(pool) -> {
+          log.info(
+            "Started "
+            <> int.to_string(gateway.consumer_count(pool))
+            <> " consumers",
+          )
+          Ok(pool)
         }
-        True -> {
-          // RabbitMQ mode: subscribe to the queue
-          case table {
-            Some(st) -> {
-              log.info("RabbitMQ consumer mode: subscribing to queue...")
-              case
-                gateway.subscribe_events(gateway_result.gateway, fn(event) {
-                  log.info("Processing event: " <> event.id)
-                  let _ = store.insert(st, event)
-                  Nil
-                })
-              {
-                Ok(tag) -> log.info("Subscribed with consumer tag: " <> tag)
-                Error(msg) -> log.error("Failed to subscribe: " <> msg)
-              }
-              []
-            }
-            None -> []
-          }
+        Error(msg) -> {
+          log.error("Failed to start consumers: " <> msg)
+          Error(Nil)
         }
       }
     }
   }
 
-  // Build context for request handlers (needed for producer mode)
+  // Build context for request handlers
   let ctx =
     Context(
       gateway: gateway_result.gateway,
-      store: case table {
-        Some(st) -> st
-        None -> store.init()
-      },
-      consumers: consumers,
+      store: store,
+      consumer_pool: consumer_pool,
     )
 
   // Start HTTP server if this endpoint is configured as a producer
@@ -124,9 +98,7 @@ pub fn main() -> Nil {
       log.info("  GET  /events  - List all events")
       log.info("  GET  /health  - Health check")
     }
-    False -> {
-      log.info("Consumer mode: HTTP server not started")
-    }
+    False -> log.info("Consumer mode: HTTP server not started")
   }
 
   process.sleep_forever()
