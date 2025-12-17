@@ -9,6 +9,7 @@
 import auditor/channel
 import auditor/event.{type AuditEvent, AuditEvent}
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleeunit/should
 
@@ -161,7 +162,7 @@ pub fn channel_handles_many_messages_test() {
   // Send 100 messages
   list.range(1, 100)
   |> list.each(fn(i) {
-    let id = "evt-" <> int_to_string(i)
+    let id = "evt-" <> int.to_string(i)
     channel.send(ch, make_event(id, "bulk"))
   })
 
@@ -181,22 +182,3 @@ pub fn channel_handles_many_messages_test() {
   channel.queue_length(ch, 1000)
   |> should.equal(0)
 }
-
-// Helper to convert int to string (avoiding dependency on gleam/int in test)
-fn int_to_string(n: Int) -> String {
-  case n {
-    0 -> "0"
-    1 -> "1"
-    2 -> "2"
-    3 -> "3"
-    4 -> "4"
-    5 -> "5"
-    6 -> "6"
-    7 -> "7"
-    8 -> "8"
-    9 -> "9"
-    _ if n < 0 -> "-" <> int_to_string(-n)
-    _ -> int_to_string(n / 10) <> int_to_string(n % 10)
-  }
-}
-

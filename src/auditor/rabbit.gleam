@@ -12,6 +12,7 @@ import carotte/channel.{type Channel}
 import carotte/publisher
 import carotte/queue
 import gleam/dynamic/decode
+import gleam/int
 import gleam/json
 
 /// RabbitMQ connection state
@@ -21,7 +22,12 @@ pub type RabbitConnection {
 
 /// Connect to RabbitMQ and set up the queue
 pub fn connect(config: RabbitConfig) -> Result(RabbitConnection, String) {
-  log.info("Connecting to RabbitMQ at " <> config.host <> ":" <> int_to_string(config.port))
+  log.info(
+    "Connecting to RabbitMQ at "
+    <> config.host
+    <> ":"
+    <> int.to_string(config.port),
+  )
 
   // Build the client connection
   let client_result =
@@ -68,7 +74,8 @@ pub fn connect(config: RabbitConfig) -> Result(RabbitConnection, String) {
         }
       }
     }
-    Error(e) -> Error("Failed to connect to RabbitMQ: " <> carotte_error_to_string(e))
+    Error(e) ->
+      Error("Failed to connect to RabbitMQ: " <> carotte_error_to_string(e))
   }
 }
 
@@ -101,18 +108,19 @@ pub fn subscribe(
   callback: fn(AuditEvent) -> Nil,
 ) -> Result(String, String) {
   case
-    queue.subscribe(channel: conn.channel, queue: conn.queue_name, callback: fn(
-      payload,
-      _deliver,
-    ) {
-      case json_to_event(payload.payload) {
-        Ok(event) -> callback(event)
-        Error(_) -> {
-          log.error("Failed to parse event from queue: " <> payload.payload)
-          Nil
+    queue.subscribe(
+      channel: conn.channel,
+      queue: conn.queue_name,
+      callback: fn(payload, _deliver) {
+        case json_to_event(payload.payload) {
+          Ok(event) -> callback(event)
+          Error(_) -> {
+            log.error("Failed to parse event from queue: " <> payload.payload)
+            Nil
+          }
         }
-      }
-    })
+      },
+    )
   {
     Ok(consumer_tag) -> Ok(consumer_tag)
     Error(e) -> Error("Failed to subscribe: " <> carotte_error_to_string(e))
@@ -123,7 +131,8 @@ pub fn subscribe(
 pub fn close(conn: RabbitConnection) -> Result(Nil, String) {
   case carotte.close(conn.client) {
     Ok(_) -> Ok(Nil)
-    Error(e) -> Error("Failed to close connection: " <> carotte_error_to_string(e))
+    Error(e) ->
+      Error("Failed to close connection: " <> carotte_error_to_string(e))
   }
 }
 
@@ -182,22 +191,3 @@ fn carotte_error_to_string(error: carotte.CarotteError) -> String {
     carotte.UnknownError(msg) -> "Unknown error: " <> msg
   }
 }
-
-/// Simple int to string helper
-fn int_to_string(n: Int) -> String {
-  case n {
-    0 -> "0"
-    1 -> "1"
-    2 -> "2"
-    3 -> "3"
-    4 -> "4"
-    5 -> "5"
-    6 -> "6"
-    7 -> "7"
-    8 -> "8"
-    9 -> "9"
-    _ if n < 0 -> "-" <> int_to_string(-n)
-    _ -> int_to_string(n / 10) <> int_to_string(n % 10)
-  }
-}
-
