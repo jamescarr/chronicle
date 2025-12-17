@@ -14,6 +14,7 @@ import carotte/queue
 import gleam/dynamic/decode
 import gleam/int
 import gleam/json
+import gleam/result
 
 /// RabbitMQ connection state
 pub type RabbitConnection {
@@ -159,10 +160,8 @@ fn json_to_event(payload: String) -> Result(AuditEvent, Nil) {
       timestamp: timestamp,
     ))
   }
-  case json.parse(payload, decoder) {
-    Ok(evt) -> Ok(evt)
-    Error(_) -> Error(Nil)
-  }
+  json.parse(payload, decoder)
+  |> result.replace_error(Nil)
 }
 
 /// Convert carotte error to string for logging

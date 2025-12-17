@@ -18,6 +18,7 @@ import auditor/event.{type AuditEvent}
 import auditor/log
 import auditor/rabbit
 import gleam/erlang/process.{type Subject}
+import gleam/result
 
 /// The Gateway handle - opaque to callers
 /// This is what makes it a true Gateway pattern - callers don't know the internals
@@ -62,15 +63,13 @@ fn start_rabbit_gateway(
     <> config.rabbitmq_connection_string(rabbit_config),
   )
 
-  case rabbit.connect(rabbit_config) {
-    Ok(connection) -> {
-      Ok(GatewayResult(
-        gateway: RabbitGateway(connection: connection),
-        transport_name: "RabbitMQ (" <> rabbit_config.queue <> ")",
-      ))
-    }
-    Error(msg) -> Error(msg)
-  }
+  rabbit.connect(rabbit_config)
+  |> result.map(fn(connection) {
+    GatewayResult(
+      gateway: RabbitGateway(connection: connection),
+      transport_name: "RabbitMQ (" <> rabbit_config.queue <> ")",
+    )
+  })
 }
 
 /// Send an event through the gateway (fire-and-forget)
