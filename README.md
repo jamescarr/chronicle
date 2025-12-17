@@ -1,6 +1,6 @@
 # Chronicle - Audit Logging System
 
-A demonstration of Enterprise Integration Patterns implemented in Gleam, showcasing **Point-to-Point Channel** with **Competing Consumers**.
+A demonstration of Enterprise Integration Patterns implemented in Gleam, showcasing **Point-to-Point Channel** with **Competing Consumers**, wrapped in a **Messaging Gateway** for transport abstraction.
 
 ## Architecture
 
@@ -58,7 +58,16 @@ A demonstration of Enterprise Integration Patterns implemented in Gleam, showcas
 
 ## Enterprise Integration Patterns
 
-Chronicle demonstrates two patterns from *Enterprise Integration Patterns* by Hohpe & Woolf:
+Chronicle demonstrates several patterns from *Enterprise Integration Patterns* by Hohpe & Woolf:
+
+### Messaging Gateway
+
+> A Messaging Gateway wraps messaging-specific method calls and exposes domain-specific methods to the application.
+
+- The **Gateway** (`gateway.gleam`) abstracts the messaging transport
+- Application code calls `gateway.send_event()` without knowing the backend
+- Supports **OTP** (in-process) or **RabbitMQ** (distributed) transports
+- Configuration-driven via environment variables (12-factor app)
 
 ### Point-to-Point Channel
 
@@ -77,6 +86,38 @@ Chronicle demonstrates two patterns from *Enterprise Integration Patterns* by Ho
 - They **race** to grab each message
 - Load is **distributed** across consumers
 - All write to the **same store** (ETS handles concurrency)
+
+## Transport Modes
+
+Chronicle supports two messaging transports:
+
+| Mode | Environment | Use Case |
+|------|-------------|----------|
+| **OTP** (default) | `CHRONICLE_TRANSPORT=otp` | Development, single node |
+| **RabbitMQ** | `CHRONICLE_TRANSPORT=rabbitmq` | Production, distributed |
+
+### OTP Mode (Default)
+
+Uses Gleam/OTP actors for in-process messaging. No external dependencies.
+
+```bash
+gleam run  # Uses OTP by default
+```
+
+### RabbitMQ Mode
+
+Uses RabbitMQ via carotte for distributed messaging.
+
+```bash
+# Start RabbitMQ
+just rabbit-up
+
+# Run with RabbitMQ
+just run-rabbit
+# or: CHRONICLE_TRANSPORT=rabbitmq gleam run
+```
+
+See [docs/rabbitmq-setup.md](docs/rabbitmq-setup.md) for detailed setup instructions.
 
 ## Process-per-Request Model
 

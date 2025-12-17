@@ -114,3 +114,37 @@ info:
     @echo "Project structure:"
     @ls -la src/auditor/
 
+# =============================================================================
+# RabbitMQ Commands
+# =============================================================================
+
+# Start RabbitMQ via Docker Compose
+rabbit-up:
+    docker-compose up -d
+    @echo "RabbitMQ starting..."
+    @echo "Management UI: http://localhost:15672 (guest/guest)"
+
+# Stop RabbitMQ
+rabbit-down:
+    docker-compose down
+
+# Show RabbitMQ logs
+rabbit-logs:
+    docker-compose logs -f rabbitmq
+
+# Check RabbitMQ status
+rabbit-status:
+    @docker-compose ps
+    @echo ""
+    @echo "Queue status:"
+    @curl -s -u guest:guest http://localhost:15672/api/queues/%2F/chronicle.events 2>/dev/null | jq '{name: .name, messages: .messages, consumers: .consumers}' || echo "Queue not found or RabbitMQ not running"
+
+# Run with RabbitMQ transport
+run-rabbit:
+    CHRONICLE_TRANSPORT=rabbitmq gleam run
+
+# Clean RabbitMQ data
+rabbit-clean:
+    docker-compose down -v
+    @echo "RabbitMQ data cleaned"
+

@@ -1,0 +1,31 @@
+# Chronicle - RabbitMQ Development Environment
+#
+# Start RabbitMQ for local development:
+#   docker-compose up -d
+#
+# Management UI available at: http://localhost:15672
+# Default credentials: guest/guest
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: chronicle-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  rabbitmq_data:
+
