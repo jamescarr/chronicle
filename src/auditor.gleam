@@ -8,8 +8,14 @@
 //// - Client code doesn't know if we're using OTP or RabbitMQ
 //// - Consumer lifecycle is managed through the gateway
 //// - Same code works for both local and distributed deployments
+////
+//// The Entity Registry supports Pipes and Filters enrichment:
+//// - Register entities via /entities API
+//// - Events can reference entities via entity_key
+//// - Pipeline filters enrich events with entity metadata
 
 import auditor/config
+import auditor/entity_store
 import auditor/gateway
 import auditor/log
 import auditor/router.{Context}
@@ -36,8 +42,9 @@ pub fn main() -> Nil {
   let assert Ok(gateway_result) = gateway.start(cfg)
   log.info("Gateway started: " <> gateway_result.transport_name)
 
-  // Initialize storage (only needed if we're consuming)
+  // Initialize storage
   let store = store.init()
+  let entities = entity_store.init()
 
   // Start consumers if this endpoint is configured as a consumer
   // The gateway handles all transport-specific details!
@@ -75,6 +82,7 @@ pub fn main() -> Nil {
     Context(
       gateway: gateway_result.gateway,
       store: store,
+      entity_store: entities,
       consumer_pool: consumer_pool,
     )
 
@@ -94,9 +102,11 @@ pub fn main() -> Nil {
       log.info(
         "Chronicle running at http://localhost:" <> int.to_string(cfg.port),
       )
-      log.info("  POST /events  - Create audit event")
-      log.info("  GET  /events  - List all events")
-      log.info("  GET  /health  - Health check")
+      log.info("  POST /events     - Create audit event")
+      log.info("  GET  /events     - List all events")
+      log.info("  POST /entities   - Register entity for enrichment")
+      log.info("  GET  /entities   - List all entities")
+      log.info("  GET  /health     - Health check")
     }
     False -> log.info("Consumer mode: HTTP server not started")
   }

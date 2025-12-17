@@ -3,6 +3,7 @@
 //// These tests start a real server and make HTTP requests to verify behavior.
 
 import auditor/config
+import auditor/entity_store
 import auditor/gateway
 import auditor/router.{Context}
 import auditor/store
@@ -27,6 +28,7 @@ const base_url = "http://localhost:9999"
 /// Start the server for testing
 fn start_test_server() -> Nil {
   let table = store.init()
+  let entities = entity_store.init()
 
   // Use default OTP transport for tests
   let cfg = config.load()
@@ -41,6 +43,7 @@ fn start_test_server() -> Nil {
     Context(
       gateway: gateway_result.gateway,
       store: table,
+      entity_store: entities,
       consumer_pool: consumer_pool,
     )
 
