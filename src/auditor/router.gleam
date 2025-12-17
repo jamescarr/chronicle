@@ -1,17 +1,19 @@
 //// HTTP Router - handles incoming audit event and entity requests
 ////
 //// Provides a REST API for:
-//// - Audit events: creating and listing
+//// - Audit events: creating and listing (with pipeline processing)
 //// - Entities: CRUD for enrichment lookup data
 ////
-//// Events are sent through a Messaging Gateway for async processing.
-//// Entities are stored in the entity registry for pipeline enrichment.
+//// Events are processed through a Pipes and Filters pipeline before
+//// being sent through the Messaging Gateway for async delivery.
 
 import auditor/entity
 import auditor/entity_store.{type EntityTable}
 import auditor/event
+import auditor/filters
 import auditor/gateway.{type ConsumerPool, type Gateway}
 import auditor/log
+import auditor/pipeline
 import auditor/store.{type Table}
 import birl
 import gleam/dict
@@ -19,6 +21,7 @@ import gleam/dynamic/decode
 import gleam/http.{Delete, Get, Post}
 import gleam/json
 import gleam/list
+import gleam/option.{None, Some}
 import wisp.{type Request as WispRequest, type Response as WispResponse}
 import youid/uuid
 
@@ -60,45 +63,94 @@ fn handle_events(req: WispRequest, ctx: Context) -> WispResponse {
 }
 
 /// POST /events - create a new audit event
+/// Supports optional enrichment fields: entity_key, correlation_id
 fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
   use body <- wisp.require_string_body(req)
 
+  // Decode required and optional fields
   let decoder = {
     use actor <- decode.field("actor", decode.string)
     use action <- decode.field("action", decode.string)
     use resource_type <- decode.field("resource_type", decode.string)
     use resource_id <- decode.field("resource_id", decode.string)
-    decode.success(#(actor, action, resource_type, resource_id))
+    use entity_key <- decode.optional_field(
+      "entity_key",
+      None,
+      decode.string |> decode.map(Some),
+    )
+    use correlation_id <- decode.optional_field(
+      "correlation_id",
+      None,
+      decode.string |> decode.map(Some),
+    )
+    decode.success(#(
+      actor,
+      action,
+      resource_type,
+      resource_id,
+      entity_key,
+      correlation_id,
+    ))
   }
 
   case json.parse(body, decoder) {
-    Ok(#(actor, action, resource_type, resource_id)) -> {
+    Ok(#(actor, action, resource_type, resource_id, entity_key, correlation_id)) -> {
       let id = uuid.v4_string()
       let timestamp = birl.utc_now() |> birl.to_iso8601
 
-      let audit_event =
-        event.new(id, actor, action, resource_type, resource_id, timestamp)
+      // Create event with optional enrichment fields
+      let raw_event =
+        event.new_with_enrichment(
+          id,
+          actor,
+          action,
+          resource_type,
+          resource_id,
+          timestamp,
+          correlation_id,
+          entity_key,
+        )
 
-      // Send through the gateway - doesn't matter if it's OTP or RabbitMQ!
-      gateway.send_event(ctx.gateway, audit_event)
+      // Process through the enrichment pipeline
+      let pipe = filters.enrichment_pipeline(ctx.entity_store)
 
-      // Notify consumers - gateway handles the transport-specific details
-      case ctx.consumer_pool {
-        Ok(pool) -> gateway.notify_consumers(pool)
-        Error(_) -> Nil
+      case pipeline.process(pipe, raw_event) {
+        Ok(processed_event) -> {
+          // Send through the gateway
+          gateway.send_event(ctx.gateway, processed_event)
+
+          // Notify consumers
+          case ctx.consumer_pool {
+            Ok(pool) -> gateway.notify_consumers(pool)
+            Error(_) -> Nil
+          }
+
+          log.info("Queued event " <> id)
+
+          wisp.response(202)
+          |> wisp.json_body(
+            json.to_string(
+              json.object([
+                #("status", json.string("accepted")),
+                #("id", json.string(id)),
+              ]),
+            ),
+          )
+        }
+        Error(reason) -> {
+          log.warn("Event rejected by pipeline: " <> reason)
+
+          wisp.response(422)
+          |> wisp.json_body(
+            json.to_string(
+              json.object([
+                #("error", json.string("validation_failed")),
+                #("reason", json.string(reason)),
+              ]),
+            ),
+          )
+        }
       }
-
-      log.info("Queued event " <> id)
-
-      wisp.response(202)
-      |> wisp.json_body(
-        json.to_string(
-          json.object([
-            #("status", json.string("accepted")),
-            #("id", json.string(id)),
-          ]),
-        ),
-      )
     }
     Error(_) -> {
       wisp.bad_request("Invalid JSON format")
@@ -136,11 +188,7 @@ fn handle_entities(req: WispRequest, ctx: Context) -> WispResponse {
 }
 
 /// Handle /entities/:key endpoint (single entity)
-fn handle_entity(
-  req: WispRequest,
-  ctx: Context,
-  key: String,
-) -> WispResponse {
+fn handle_entity(req: WispRequest, ctx: Context, key: String) -> WispResponse {
   case req.method {
     Get -> get_entity(ctx, key)
     Delete -> delete_entity(ctx, key)
