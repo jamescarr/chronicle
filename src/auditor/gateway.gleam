@@ -16,13 +16,14 @@ import auditor/channel
 import auditor/config.{type Config, type RabbitConfig, Otp, RabbitMQ}
 import auditor/event.{type AuditEvent}
 import auditor/log
+import auditor/rabbit
 import gleam/erlang/process.{type Subject}
 
 /// The Gateway handle - opaque to callers
 /// This is what makes it a true Gateway pattern - callers don't know the internals
 pub opaque type Gateway {
   OtpGateway(channel: Subject(channel.ChannelMessage))
-  RabbitGateway(config: RabbitConfig)
+  RabbitGateway(connection: rabbit.RabbitConnection)
 }
 
 /// Result of starting the gateway
@@ -53,18 +54,23 @@ fn start_otp_gateway() -> Result(GatewayResult, String) {
 }
 
 /// Start a RabbitMQ gateway
-/// NOTE: Actual RabbitMQ connection will be implemented when we add carotte
-fn start_rabbit_gateway(rabbit_config: RabbitConfig) -> Result(GatewayResult, String) {
+fn start_rabbit_gateway(
+  rabbit_config: RabbitConfig,
+) -> Result(GatewayResult, String) {
   log.info(
     "Starting RabbitMQ gateway: "
     <> config.rabbitmq_connection_string(rabbit_config),
   )
-  // Placeholder - will be implemented with carotte
-  // For now, return the gateway handle that will be used for rabbit operations
-  Ok(GatewayResult(
-    gateway: RabbitGateway(config: rabbit_config),
-    transport_name: "RabbitMQ (" <> rabbit_config.queue <> ")",
-  ))
+
+  case rabbit.connect(rabbit_config) {
+    Ok(connection) -> {
+      Ok(GatewayResult(
+        gateway: RabbitGateway(connection: connection),
+        transport_name: "RabbitMQ (" <> rabbit_config.queue <> ")",
+      ))
+    }
+    Error(msg) -> Error(msg)
+  }
 }
 
 /// Send an event through the gateway (fire-and-forget)
@@ -74,21 +80,21 @@ pub fn send_event(gateway: Gateway, event: AuditEvent) -> Nil {
     OtpGateway(channel:) -> {
       channel.send(channel, event)
     }
-    RabbitGateway(config:) -> {
-      // Placeholder for RabbitMQ publish
-      log.debug(
-        "Would publish to RabbitMQ queue: "
-        <> config.queue
-        <> " event: "
-        <> event.id,
-      )
-      Nil
+    RabbitGateway(connection:) -> {
+      case rabbit.publish(connection, event) {
+        Ok(_) -> Nil
+        Error(msg) -> {
+          log.error("Failed to publish to RabbitMQ: " <> msg)
+          Nil
+        }
+      }
     }
   }
 }
 
 /// Receive an event from the gateway (blocking with timeout)
-/// Used by consumers to pull messages
+/// Used by consumers to pull messages (only for OTP mode)
+/// RabbitMQ uses push-based subscription via subscribe_events
 pub fn receive_event(
   gateway: Gateway,
   timeout_ms: Int,
@@ -97,10 +103,27 @@ pub fn receive_event(
     OtpGateway(channel:) -> {
       channel.receive(channel, timeout_ms)
     }
-    RabbitGateway(_config) -> {
-      // Placeholder for RabbitMQ consume
-      // RabbitMQ will use push-based consumers via carotte
+    RabbitGateway(_) -> {
+      // RabbitMQ uses push-based consumers, not pull
+      // Use subscribe_events() instead
       Error(Nil)
+    }
+  }
+}
+
+/// Subscribe to events (RabbitMQ mode)
+/// The callback is invoked for each event received
+pub fn subscribe_events(
+  gateway: Gateway,
+  callback: fn(AuditEvent) -> Nil,
+) -> Result(String, String) {
+  case gateway {
+    OtpGateway(_) -> {
+      // OTP mode doesn't need subscription - use receive_event + polling
+      Error("OTP gateway uses pull-based receive_event, not subscription")
+    }
+    RabbitGateway(connection:) -> {
+      rabbit.subscribe(connection, callback)
     }
   }
 }
@@ -116,7 +139,7 @@ pub fn queue_length(gateway: Gateway, timeout_ms: Int) -> Int {
   }
 }
 
-/// Check if the gateway is using RabbitMQ
+/// Check if the gateway is using RabbitMQ (distributed mode)
 pub fn is_distributed(gateway: Gateway) -> Bool {
   case gateway {
     OtpGateway(_) -> False
@@ -126,10 +149,21 @@ pub fn is_distributed(gateway: Gateway) -> Bool {
 
 /// Get the underlying OTP channel subject (for backwards compatibility)
 /// This will be removed once we fully migrate to gateway-based consumers
-pub fn get_otp_channel(gateway: Gateway) -> Result(Subject(channel.ChannelMessage), Nil) {
+pub fn get_otp_channel(
+  gateway: Gateway,
+) -> Result(Subject(channel.ChannelMessage), Nil) {
   case gateway {
     OtpGateway(channel:) -> Ok(channel)
     RabbitGateway(_) -> Error(Nil)
   }
 }
 
+/// Get the RabbitMQ connection (for advanced use cases)
+pub fn get_rabbit_connection(
+  gateway: Gateway,
+) -> Result(rabbit.RabbitConnection, Nil) {
+  case gateway {
+    OtpGateway(_) -> Error(Nil)
+    RabbitGateway(connection:) -> Ok(connection)
+  }
+}
