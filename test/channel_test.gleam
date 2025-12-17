@@ -7,7 +7,7 @@
 //// - Queue length can be queried
 
 import auditor/channel
-import auditor/event.{type AuditEvent, AuditEvent}
+import auditor/event.{type AuditEvent}
 import gleam/erlang/process
 import gleam/int
 import gleam/list
@@ -18,14 +18,7 @@ import gleeunit/should
 // =============================================================================
 
 fn make_event(id: String, action: String) -> AuditEvent {
-  AuditEvent(
-    id: id,
-    actor: "test@example.com",
-    action: action,
-    resource_type: "test",
-    resource_id: "test-123",
-    timestamp: "2025-12-16T00:00:00Z",
-  )
+  event.new(id, "test@example.com", action, "test", "test-123", "2025-12-16T00:00:00Z")
 }
 
 // =============================================================================
@@ -133,13 +126,13 @@ pub fn channel_preserves_event_data_test() {
   let ch = started.data
 
   let original =
-    AuditEvent(
-      id: "test-id-123",
-      actor: "alice@company.com",
-      action: "archive",
-      resource_type: "document",
-      resource_id: "doc-456",
-      timestamp: "2025-12-16T12:00:00Z",
+    event.new(
+      "test-id-123",
+      "alice@company.com",
+      "archive",
+      "document",
+      "doc-456",
+      "2025-12-16T12:00:00Z",
     )
 
   channel.send(ch, original)
