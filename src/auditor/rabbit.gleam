@@ -84,23 +84,19 @@ pub fn connect(config: RabbitConfig) -> Result(RabbitConnection, String) {
 pub fn publish(conn: RabbitConnection, event: AuditEvent) -> Result(Nil, String) {
   let payload = event_to_json(event)
 
-  case
-    publisher.publish(
-      channel: conn.channel,
-      exchange: "",
-      // Direct to queue (default exchange)
-      routing_key: conn.queue_name,
-      payload: payload,
-      options: [
-        publisher.Persistent(True),
-        publisher.ContentType("application/json"),
-        publisher.MessageId(event.id),
-      ],
-    )
-  {
-    Ok(_) -> Ok(Nil)
-    Error(e) -> Error("Failed to publish: " <> carotte_error_to_string(e))
-  }
+  publisher.publish(
+    channel: conn.channel,
+    exchange: "",
+    // Direct to queue (default exchange)
+    routing_key: conn.queue_name,
+    payload: payload,
+    options: [
+      publisher.Persistent(True),
+      publisher.ContentType("application/json"),
+      publisher.MessageId(event.id),
+    ],
+  )
+  |> result.map_error(fn(e) { "Failed to publish: " <> carotte_error_to_string(e) })
 }
 
 /// Subscribe to the queue and process events with a callback
@@ -108,33 +104,30 @@ pub fn subscribe(
   conn: RabbitConnection,
   callback: fn(AuditEvent) -> Nil,
 ) -> Result(String, String) {
-  case
-    queue.subscribe(
-      channel: conn.channel,
-      queue: conn.queue_name,
-      callback: fn(payload, _deliver) {
-        case json_to_event(payload.payload) {
-          Ok(event) -> callback(event)
-          Error(_) -> {
-            log.error("Failed to parse event from queue: " <> payload.payload)
-            Nil
-          }
+  queue.subscribe(
+    channel: conn.channel,
+    queue: conn.queue_name,
+    callback: fn(payload, _deliver) {
+      case json_to_event(payload.payload) {
+        Ok(event) -> callback(event)
+        Error(_) -> {
+          log.error("Failed to parse event from queue: " <> payload.payload)
+          Nil
         }
-      },
-    )
-  {
-    Ok(consumer_tag) -> Ok(consumer_tag)
-    Error(e) -> Error("Failed to subscribe: " <> carotte_error_to_string(e))
-  }
+      }
+    },
+  )
+  |> result.map_error(fn(e) {
+    "Failed to subscribe: " <> carotte_error_to_string(e)
+  })
 }
 
 /// Close the RabbitMQ connection
 pub fn close(conn: RabbitConnection) -> Result(Nil, String) {
-  case carotte.close(conn.client) {
-    Ok(_) -> Ok(Nil)
-    Error(e) ->
-      Error("Failed to close connection: " <> carotte_error_to_string(e))
-  }
+  carotte.close(conn.client)
+  |> result.map_error(fn(e) {
+    "Failed to close connection: " <> carotte_error_to_string(e)
+  })
 }
 
 /// Serialize an audit event to JSON string
