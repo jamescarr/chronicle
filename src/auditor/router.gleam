@@ -1,11 +1,15 @@
 //// HTTP Router - handles incoming audit event requests
 ////
 //// Provides a REST API for creating and listing audit events.
-//// Events are sent through a Point-to-Point Channel for async processing.
+//// Events are sent through a Messaging Gateway for async processing.
+////
+//// The router demonstrates the Gateway pattern - it doesn't know
+//// whether events go to OTP actors or RabbitMQ. It just calls
+//// gateway.send_event() and the abstraction handles the rest.
 
-import auditor/channel.{type ChannelMessage}
 import auditor/consumer
 import auditor/event
+import auditor/gateway.{type Gateway}
 import auditor/log
 import auditor/store.{type Table}
 import birl
@@ -20,7 +24,7 @@ import youid/uuid
 /// Context passed to request handlers
 pub type Context {
   Context(
-    channel: Subject(ChannelMessage),
+    gateway: Gateway,
     store: Table,
     consumers: List(Subject(consumer.ConsumerMessage)),
   )
@@ -33,7 +37,7 @@ pub fn handle_request(req: WispRequest, ctx: Context) -> WispResponse {
 
   case wisp.path_segments(req) {
     ["events"] -> handle_events(req, ctx)
-    ["health"] -> health_check()
+    ["health"] -> health_check(ctx)
     _ -> wisp.not_found()
   }
 }
@@ -67,7 +71,10 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
       let audit_event =
         event.new(id, actor, action, resource_type, resource_id, timestamp)
 
-      channel.send(ctx.channel, audit_event)
+      // Send through the gateway - doesn't matter if it's OTP or RabbitMQ!
+      gateway.send_event(ctx.gateway, audit_event)
+
+      // Poll consumers (only applicable in OTP mode)
       consumer.poll_all(ctx.consumers)
 
       log.info("Queued event " <> id)
@@ -105,9 +112,19 @@ fn list_events(ctx: Context) -> WispResponse {
 }
 
 /// Health check endpoint
-fn health_check() -> WispResponse {
+fn health_check(ctx: Context) -> WispResponse {
+  let transport = case gateway.is_distributed(ctx.gateway) {
+    True -> "rabbitmq"
+    False -> "otp"
+  }
+
   wisp.ok()
   |> wisp.json_body(
-    json.to_string(json.object([#("status", json.string("healthy"))])),
+    json.to_string(
+      json.object([
+        #("status", json.string("healthy")),
+        #("transport", json.string(transport)),
+      ]),
+    ),
   )
 }
