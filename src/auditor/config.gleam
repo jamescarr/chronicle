@@ -7,6 +7,7 @@
 ////
 //// Environment Variables:
 //// - CHRONICLE_TRANSPORT: "otp" (default) or "rabbitmq"
+//// - CHRONICLE_MODE: "full" (default), "producer", or "consumer"
 //// - CHRONICLE_PORT: HTTP server port (default: 8080)
 //// - CHRONICLE_CONSUMER_COUNT: Number of competing consumers (default: 3)
 //// - RABBITMQ_HOST: RabbitMQ host (default: localhost)
@@ -28,6 +29,17 @@ pub type Transport {
   RabbitMQ
 }
 
+/// Messaging Endpoint mode - defines the role of this instance
+/// This implements the Messaging Endpoint pattern from EIP
+pub type EndpointMode {
+  /// Full mode: both produces and consumes messages (default for development)
+  Full
+  /// Producer mode: only accepts HTTP requests and publishes to the channel
+  Producer
+  /// Consumer mode: only consumes from the channel and stores events
+  Consumer
+}
+
 /// RabbitMQ connection configuration
 pub type RabbitConfig {
   RabbitConfig(
@@ -44,6 +56,7 @@ pub type RabbitConfig {
 pub type Config {
   Config(
     transport: Transport,
+    mode: EndpointMode,
     port: Int,
     consumer_count: Int,
     rabbitmq: RabbitConfig,
@@ -55,6 +68,7 @@ pub type Config {
 pub fn load() -> Config {
   Config(
     transport: load_transport(),
+    mode: load_mode(),
     port: load_port(),
     consumer_count: load_consumer_count(),
     rabbitmq: load_rabbitmq_config(),
@@ -68,6 +82,17 @@ fn load_transport() -> Transport {
     Ok("rabbit") -> RabbitMQ
     Ok("rmq") -> RabbitMQ
     _ -> Otp
+  }
+}
+
+/// Load endpoint mode from CHRONICLE_MODE
+fn load_mode() -> EndpointMode {
+  case envoy.get("CHRONICLE_MODE") {
+    Ok("producer") -> Producer
+    Ok("prod") -> Producer
+    Ok("consumer") -> Consumer
+    Ok("cons") -> Consumer
+    _ -> Full
   }
 }
 
@@ -112,6 +137,33 @@ pub fn is_rabbitmq(config: Config) -> Bool {
   case config.transport {
     RabbitMQ -> True
     Otp -> False
+  }
+}
+
+/// Get a human-readable description of the endpoint mode
+pub fn mode_name(mode: EndpointMode) -> String {
+  case mode {
+    Full -> "Full (producer + consumer)"
+    Producer -> "Producer only"
+    Consumer -> "Consumer only"
+  }
+}
+
+/// Check if this endpoint should run as a producer (accept HTTP requests)
+pub fn is_producer(config: Config) -> Bool {
+  case config.mode {
+    Full -> True
+    Producer -> True
+    Consumer -> False
+  }
+}
+
+/// Check if this endpoint should run as a consumer (process messages)
+pub fn is_consumer(config: Config) -> Bool {
+  case config.mode {
+    Full -> True
+    Producer -> False
+    Consumer -> True
   }
 }
 
