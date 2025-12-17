@@ -17,9 +17,17 @@ build:
 test:
     gleam test
 
-# Run the server
+# Run the server (full mode - producer + consumer)
 run:
     gleam run
+
+# Run as producer only (HTTP API, publishes to channel)
+run-producer:
+    CHRONICLE_MODE=producer gleam run
+
+# Run as consumer only (subscribes to channel, stores events)
+run-consumer:
+    CHRONICLE_MODE=consumer gleam run
 
 # Run the server in watch mode (rebuilds on changes)
 watch:
@@ -139,9 +147,17 @@ rabbit-status:
     @echo "Queue status:"
     @curl -s -u guest:guest http://localhost:15672/api/queues/%2F/chronicle.events 2>/dev/null | jq '{name: .name, messages: .messages, consumers: .consumers}' || echo "Queue not found or RabbitMQ not running"
 
-# Run with RabbitMQ transport
+# Run with RabbitMQ transport (full mode)
 run-rabbit:
     CHRONICLE_TRANSPORT=rabbitmq gleam run
+
+# Run RabbitMQ producer only (HTTP API, publishes to queue)
+run-rabbit-producer:
+    CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=producer gleam run
+
+# Run RabbitMQ consumer only (subscribes to queue, stores events)
+run-rabbit-consumer:
+    CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=consumer gleam run
 
 # Clean RabbitMQ data
 rabbit-clean:

@@ -289,21 +289,31 @@ src/
 ## Available just commands
 
 ```bash
-just              # Show all available commands
-just bootstrap    # Clean, install deps, build
-just build        # Build the project
-just check        # Format, build, and test
-just clean        # Remove build artifacts
-just deps         # Install dependencies
-just dev          # Install, build, and run
-just fmt          # Format code
-just health       # Check server health
-just ingest       # Send a random event to the server
-just flood 20     # Send 20 events in parallel (test competing consumers)
-just list-events  # List all events from the server
-just run          # Start the server
-just test         # Run tests
-just watch        # Run with auto-reload (requires watchexec)
+just                    # Show all available commands
+just bootstrap          # Clean, install deps, build
+just build              # Build the project
+just check              # Format, build, and test
+just clean              # Remove build artifacts
+just deps               # Install dependencies
+just dev                # Install, build, and run
+just fmt                # Format code
+just health             # Check server health
+just ingest             # Send a random event to the server
+just flood 20           # Send 20 events in parallel (test competing consumers)
+just list-events        # List all events from the server
+just run                # Start the server (full mode)
+just run-producer       # Start producer only (HTTP API)
+just run-consumer       # Start consumer only (processes events)
+just test               # Run tests
+just watch              # Run with auto-reload (requires watchexec)
+
+# RabbitMQ commands
+just rabbit-up          # Start RabbitMQ via Docker
+just rabbit-down        # Stop RabbitMQ
+just rabbit-status      # Show RabbitMQ and queue status
+just run-rabbit         # Run with RabbitMQ (full mode)
+just run-rabbit-producer # Producer with RabbitMQ
+just run-rabbit-consumer # Consumer with RabbitMQ
 ```
 
 ## Dependencies

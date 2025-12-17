@@ -147,6 +147,62 @@ just list-events
 | Performance | Very fast | Network overhead |
 | Use case | Development, single node | Production, distributed |
 
+## Running Producer and Consumer Separately
+
+In production deployments, you typically run producers and consumers as separate processes. This enables:
+
+- **Independent scaling**: Scale consumers based on queue depth
+- **Fault isolation**: Consumer crashes don't affect the HTTP API
+- **Deployment flexibility**: Update consumers without downtime
+
+### Terminal 1: Start RabbitMQ
+
+```bash
+just rabbit-up
+```
+
+### Terminal 2: Start the Producer
+
+```bash
+just run-rabbit-producer
+```
+
+This starts the HTTP API that publishes events to RabbitMQ.
+
+### Terminal 3: Start the Consumer
+
+```bash
+just run-rabbit-consumer
+```
+
+This subscribes to the queue and processes events.
+
+### Testing the Setup
+
+```bash
+# Send events via the producer
+just ingest
+just ingest
+just ingest
+
+# Check the RabbitMQ management UI to see messages being processed
+# http://localhost:15672 -> Queues -> chronicle.events
+```
+
+### Running Multiple Consumers
+
+You can run multiple consumer instances for parallel processing:
+
+```bash
+# Terminal 3
+CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=consumer CHRONICLE_PORT=8081 gleam run
+
+# Terminal 4
+CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=consumer CHRONICLE_PORT=8082 gleam run
+```
+
+Each consumer will receive different messages from the queue (competing consumers pattern).
+
 ## Troubleshooting
 
 ### Connection Refused
