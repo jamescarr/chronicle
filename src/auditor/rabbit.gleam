@@ -147,7 +147,14 @@ fn json_to_event(payload: String) -> Result(AuditEvent, Nil) {
     use resource_id <- decode.field("resource_id", decode.string)
     use timestamp <- decode.field("timestamp", decode.string)
     // Use event.new to get default values for enrichment fields
-    decode.success(event.new(id, actor, action, resource_type, resource_id, timestamp))
+    decode.success(event.new(
+      id,
+      actor,
+      action,
+      resource_type,
+      resource_id,
+      timestamp,
+    ))
   }
   json.parse(payload, decoder)
   |> result.replace_error(Nil)
