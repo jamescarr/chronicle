@@ -156,29 +156,20 @@ fn start_rabbit_consumers(
   connection: rabbit.RabbitConnection,
   st: Table,
 ) -> Result(ConsumerPool, String) {
-  let node_name = get_node_name()
-  log.info("Starting RabbitMQ consumer subscription on " <> node_name <> "...")
+  let node = node_name()
 
   rabbit.subscribe(connection, fn(event) {
     log.info(
-      "[" <> node_name <> "] Processing " <> event.id <> " - " <> event.action,
+      "[" <> node <> "] Processing " <> event.id <> " - " <> event.action,
     )
     let _ = store.insert(st, event)
     Nil
   })
-  |> result.map(fn(tag) {
-    log.info("RabbitMQ consumer subscribed with tag: " <> tag)
-    RabbitConsumerPool(consumer_tag: tag)
-  })
-}
-
-/// Get the Erlang node name as a string
-fn get_node_name() -> String {
-  do_get_node_name()
+  |> result.map(fn(tag) { RabbitConsumerPool(consumer_tag: tag) })
 }
 
 @external(erlang, "auditor_gateway_ffi", "get_node_name")
-fn do_get_node_name() -> String
+fn node_name() -> String
 
 /// Notify consumers that new messages may be available
 /// For OTP: triggers polling (competing consumers race to grab messages)

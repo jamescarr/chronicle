@@ -103,41 +103,28 @@ pub fn publish(conn: RabbitConnection, event: AuditEvent) -> Result(Nil, String)
 }
 
 /// Subscribe to the queue and process events with a callback
-/// Sets prefetch=1 for fair dispatch among competing consumers
+/// Uses prefetch=1 and manual ack for fair dispatch among competing consumers
 pub fn subscribe(
   conn: RabbitConnection,
   callback: fn(AuditEvent) -> Nil,
 ) -> Result(String, String) {
-  // Set QoS prefetch=1 for fair dispatch (competing consumers pattern)
+  // Set QoS prefetch=1 for fair dispatch
   let Channel(pid: channel_pid) = conn.channel
-  case set_prefetch(channel_pid, 1) {
-    Ok(_) -> log.info("Set prefetch=1 for fair dispatch")
-    Error(_) ->
-      log.warn("Failed to set prefetch, messages may not distribute evenly")
-  }
+  let _ = set_prefetch(channel_pid, 1)
 
-  // Use subscribe_with_options with AutoAck(True) to DISABLE auto-ack
-  // (confusing API: AutoAck(True) means "I will ack manually")
-  // This is required for prefetch/QoS to work!
+  // Manual ack mode (AutoAck(True) = "I will ack manually")
   queue.subscribe_with_options(
     channel: conn.channel,
     queue: conn.queue_name,
     options: [queue.AutoAck(True)],
     callback: fn(payload, deliver) {
       case json_to_event(payload.payload) {
-        Ok(event) -> {
-          callback(event)
-          // Manually acknowledge the message after processing
-          let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
-          Nil
-        }
-        Error(_) -> {
+        Ok(event) -> callback(event)
+        Error(_) ->
           log.error("Failed to parse event from queue: " <> payload.payload)
-          // Still ack to remove bad message from queue
-          let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
-          Nil
-        }
       }
+      let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
+      Nil
     },
   )
   |> result.map_error(fn(e) {
