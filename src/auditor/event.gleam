@@ -89,39 +89,54 @@ pub fn merge_metadata(
 }
 
 /// Encode an audit event to JSON
-pub fn to_json(event: AuditEvent) -> Json {
-  let base = [
-    #("id", json.string(event.id)),
-    #("actor", json.string(event.actor)),
-    #("action", json.string(event.action)),
-    #("resource_type", json.string(event.resource_type)),
-    #("resource_id", json.string(event.resource_id)),
-    #("timestamp", json.string(event.timestamp)),
-  ]
+pub fn to_json(evt: AuditEvent) -> Json {
+  // Build optional fields list
+  let optional_fields =
+    []
+    |> add_optional_field("correlation_id", evt.correlation_id)
+    |> add_optional_field("entity_key", evt.entity_key)
+    |> add_metadata_field(evt.metadata)
 
-  // Add optional fields if present
-  let with_correlation = case event.correlation_id {
-    Some(cid) -> list.append(base, [#("correlation_id", json.string(cid))])
-    None -> base
+  // Combine base fields with optional fields
+  json.object(
+    list.flatten([
+      [
+        #("id", json.string(evt.id)),
+        #("actor", json.string(evt.actor)),
+        #("action", json.string(evt.action)),
+        #("resource_type", json.string(evt.resource_type)),
+        #("resource_id", json.string(evt.resource_id)),
+        #("timestamp", json.string(evt.timestamp)),
+      ],
+      optional_fields,
+    ]),
+  )
+}
+
+fn add_optional_field(
+  fields: List(#(String, Json)),
+  key: String,
+  value: Option(String),
+) -> List(#(String, Json)) {
+  case value {
+    Some(v) -> [#(key, json.string(v)), ..fields]
+    None -> fields
   }
+}
 
-  let with_entity = case event.entity_key {
-    Some(ek) -> list.append(with_correlation, [#("entity_key", json.string(ek))])
-    None -> with_correlation
-  }
-
-  // Add metadata if non-empty
-  let with_metadata = case dict.is_empty(event.metadata) {
-    True -> with_entity
+fn add_metadata_field(
+  fields: List(#(String, Json)),
+  metadata: Dict(String, String),
+) -> List(#(String, Json)) {
+  case dict.is_empty(metadata) {
+    True -> fields
     False -> {
       let metadata_json =
-        event.metadata
+        metadata
         |> dict.to_list
         |> list.map(fn(pair) { #(pair.0, json.string(pair.1)) })
         |> json.object
-      list.append(with_entity, [#("metadata", metadata_json)])
+      [#("metadata", metadata_json), ..fields]
     }
   }
-
-  json.object(with_metadata)
 }

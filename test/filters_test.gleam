@@ -9,6 +9,7 @@ import auditor/filters
 import auditor/pipeline
 import gleam/dict
 import gleam/option.{None, Some}
+import gleam/result
 import gleeunit/should
 
 // =============================================================================
@@ -44,55 +45,43 @@ fn make_event_with_entity_key(key: String) -> event.AuditEvent {
 // =============================================================================
 
 pub fn validate_required_passes_valid_event_test() {
-  let evt = make_event()
-  let pipe = pipeline.from_filters([filters.validate_required()])
-
-  pipeline.process(pipe, evt)
+  make_event()
+  |> filters.validate_required
   |> should.be_ok
 }
 
 pub fn validate_required_rejects_empty_actor_test() {
-  let evt = event.AuditEvent(..make_event(), actor: "")
-  let pipe = pipeline.from_filters([filters.validate_required()])
-
-  pipeline.process(pipe, evt)
+  event.AuditEvent(..make_event(), actor: "")
+  |> filters.validate_required
   |> should.be_error
-  |> should.equal("Rejected: actor is required")
+  |> should.equal("actor is required")
 }
 
 pub fn validate_required_rejects_empty_action_test() {
-  let evt = event.AuditEvent(..make_event(), action: "")
-  let pipe = pipeline.from_filters([filters.validate_required()])
-
-  pipeline.process(pipe, evt)
+  event.AuditEvent(..make_event(), action: "")
+  |> filters.validate_required
   |> should.be_error
-  |> should.equal("Rejected: action is required")
+  |> should.equal("action is required")
 }
 
 pub fn validate_required_rejects_empty_resource_type_test() {
-  let evt = event.AuditEvent(..make_event(), resource_type: "")
-  let pipe = pipeline.from_filters([filters.validate_required()])
-
-  pipeline.process(pipe, evt)
+  event.AuditEvent(..make_event(), resource_type: "")
+  |> filters.validate_required
   |> should.be_error
-  |> should.equal("Rejected: resource_type is required")
+  |> should.equal("resource_type is required")
 }
 
 pub fn validate_actor_email_passes_valid_email_test() {
-  let evt = make_event()
-  let pipe = pipeline.from_filters([filters.validate_actor_email()])
-
-  pipeline.process(pipe, evt)
+  make_event()
+  |> filters.validate_actor_email
   |> should.be_ok
 }
 
 pub fn validate_actor_email_rejects_invalid_email_test() {
-  let evt = event.AuditEvent(..make_event(), actor: "not-an-email")
-  let pipe = pipeline.from_filters([filters.validate_actor_email()])
-
-  pipeline.process(pipe, evt)
+  event.AuditEvent(..make_event(), actor: "not-an-email")
+  |> filters.validate_actor_email
   |> should.be_error
-  |> should.equal("Rejected: actor must be an email address")
+  |> should.equal("actor must be an email address")
 }
 
 // =============================================================================
@@ -100,19 +89,15 @@ pub fn validate_actor_email_rejects_invalid_email_test() {
 // =============================================================================
 
 pub fn normalize_actor_lowercases_email_test() {
-  let evt = make_event()
-  let pipe = pipeline.from_filters([filters.normalize_actor()])
-
-  pipeline.process(pipe, evt)
+  make_event()
+  |> filters.normalize_actor
   |> should.be_ok
   |> fn(result) { result.actor |> should.equal("test@example.com") }
 }
 
 pub fn normalize_action_lowercases_action_test() {
-  let evt = make_event()
-  let pipe = pipeline.from_filters([filters.normalize_action()])
-
-  pipeline.process(pipe, evt)
+  make_event()
+  |> filters.normalize_action
   |> should.be_ok
   |> fn(result) { result.action |> should.equal("create") }
 }
@@ -127,9 +112,7 @@ pub fn trim_fields_removes_whitespace_test() {
       resource_id: " doc-123",
     )
 
-  let pipe = pipeline.from_filters([filters.trim_fields()])
-
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  let result = evt |> filters.trim_fields |> should.be_ok
   result.actor |> should.equal("test@example.com")
   result.action |> should.equal("create")
   result.resource_type |> should.equal("document")
@@ -144,9 +127,7 @@ pub fn add_correlation_id_adds_when_missing_test() {
   let evt = make_event()
   evt.correlation_id |> should.equal(None)
 
-  let pipe = pipeline.from_filters([filters.add_correlation_id()])
-
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  let result = evt |> filters.add_correlation_id |> should.be_ok
   result.correlation_id |> should.not_equal(None)
 }
 
@@ -163,9 +144,7 @@ pub fn add_correlation_id_preserves_existing_test() {
       None,
     )
 
-  let pipe = pipeline.from_filters([filters.add_correlation_id()])
-
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  let result = evt |> filters.add_correlation_id |> should.be_ok
   result.correlation_id |> should.equal(Some("existing-correlation-id"))
 }
 
@@ -183,9 +162,9 @@ pub fn enrich_from_entity_adds_metadata_test() {
   // Create event with entity_key
   let evt = make_event_with_entity_key("org:acme")
 
-  let pipe = pipeline.from_filters([filters.enrich_from_entity(store)])
-
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  // enrich_from_entity returns a filter function
+  let enrich = filters.enrich_from_entity(store)
+  let result = evt |> enrich |> should.be_ok
 
   result.metadata
   |> dict.get("entity_name")
@@ -206,11 +185,10 @@ pub fn enrich_from_entity_continues_when_not_found_test() {
   // Don't register any entities
   let evt = make_event_with_entity_key("org:nonexistent")
 
-  let pipe = pipeline.from_filters([filters.enrich_from_entity(store)])
+  let enrich = filters.enrich_from_entity(store)
 
   // Should continue without enrichment, not fail
-  pipeline.process(pipe, evt)
-  |> should.be_ok
+  evt |> enrich |> should.be_ok
 }
 
 pub fn enrich_from_entity_skips_when_no_key_test() {
@@ -218,19 +196,19 @@ pub fn enrich_from_entity_skips_when_no_key_test() {
   let evt = make_event()
   evt.entity_key |> should.equal(None)
 
-  let pipe = pipeline.from_filters([filters.enrich_from_entity(store)])
+  let enrich = filters.enrich_from_entity(store)
 
   // Should continue without any changes
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  let result = evt |> enrich |> should.be_ok
   result.metadata |> should.equal(dict.new())
 }
 
 pub fn add_metadata_adds_single_key_test() {
   let evt = make_event()
 
-  let pipe = pipeline.from_filters([filters.add_metadata("source", "api")])
+  let add_source = filters.add_metadata("source", "api")
+  let result = evt |> add_source |> should.be_ok
 
-  let result = pipeline.process(pipe, evt) |> should.be_ok
   result.metadata
   |> dict.get("source")
   |> should.equal(Ok("api"))
@@ -239,19 +217,19 @@ pub fn add_metadata_adds_single_key_test() {
 pub fn add_source_adds_source_metadata_test() {
   let evt = make_event()
 
-  let pipe = pipeline.from_filters([filters.add_source("chronicle")])
+  let add_source = filters.add_source("chronicle")
+  let result = evt |> add_source |> should.be_ok
 
-  let result = pipeline.process(pipe, evt) |> should.be_ok
   result.metadata
   |> dict.get("source")
   |> should.equal(Ok("chronicle"))
 }
 
 // =============================================================================
-// Default Pipeline Tests
+// Ingest Function Tests
 // =============================================================================
 
-pub fn default_pipeline_processes_event_test() {
+pub fn ingest_processes_event_test() {
   let evt =
     event.AuditEvent(
       ..make_event(),
@@ -259,20 +237,43 @@ pub fn default_pipeline_processes_event_test() {
       action: "  CREATE  ",
     )
 
-  let pipe = filters.default_pipeline()
+  let result = evt |> filters.ingest |> should.be_ok
 
-  let result = pipeline.process(pipe, evt) |> should.be_ok
-
-  // Should be trimmed and normalized
+  // Should be trimmed and normalized (actor lowercased)
   result.actor |> should.equal("alice@example.com")
+  // action is trimmed but normalize_actor doesn't touch action
   result.action |> should.equal("CREATE")
-  // action trimmed but not lowercased
 
   // Should have correlation ID
   result.correlation_id |> should.not_equal(None)
 }
 
-pub fn enrichment_pipeline_includes_entity_lookup_test() {
+pub fn ingest_via_pipe_chain_test() {
+  // Same as ingest but showing the explicit pipe chain
+  let evt =
+    event.AuditEvent(
+      ..make_event(),
+      actor: "  Bob@Test.COM  ",
+    )
+
+  let result =
+    Ok(evt)
+    |> result.try(filters.validate_required)
+    |> result.try(filters.trim_fields)
+    |> result.try(filters.normalize_actor)
+    |> result.try(filters.add_correlation_id)
+    |> should.be_ok
+
+  result.actor |> should.equal("bob@test.com")
+  result.correlation_id |> should.not_equal(None)
+}
+
+// =============================================================================
+// Custom Pipeline Tests
+// =============================================================================
+
+pub fn custom_pipeline_with_enrichment_test() {
+  // The enrich_from_entity filter can be used in custom pipelines
   let store = entity_store.init()
 
   let ent =
@@ -283,9 +284,13 @@ pub fn enrichment_pipeline_includes_entity_lookup_test() {
 
   let evt = make_event_with_entity_key("project:alpha")
 
-  let pipe = filters.enrichment_pipeline(store)
-
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  // Build a custom pipeline using the list runner
+  let result =
+    pipeline.run(evt, [
+      filters.validate_required,
+      filters.enrich_from_entity(store),
+    ])
+    |> should.be_ok
 
   result.metadata
   |> dict.get("entity_name")
@@ -296,3 +301,14 @@ pub fn enrichment_pipeline_includes_entity_lookup_test() {
   |> should.equal(Ok("platform"))
 }
 
+pub fn ingestion_filters_returns_filter_list_test() {
+  let evt = make_event()
+
+  // ingestion_filters returns a list we can use with pipeline.run
+  let result =
+    pipeline.run(evt, filters.ingestion_filters())
+    |> should.be_ok
+
+  result.actor |> should.equal("test@example.com")
+  result.correlation_id |> should.not_equal(None)
+}

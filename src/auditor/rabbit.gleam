@@ -8,10 +8,11 @@ import auditor/config.{type RabbitConfig}
 import auditor/event.{type AuditEvent}
 import auditor/log
 import carotte
-import carotte/channel.{type Channel}
+import carotte/channel.{type Channel, Channel}
 import carotte/publisher
 import carotte/queue
 import gleam/dynamic/decode
+import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/json
 import gleam/result
@@ -102,18 +103,38 @@ pub fn publish(conn: RabbitConnection, event: AuditEvent) -> Result(Nil, String)
 }
 
 /// Subscribe to the queue and process events with a callback
+/// Sets prefetch=1 for fair dispatch among competing consumers
 pub fn subscribe(
   conn: RabbitConnection,
   callback: fn(AuditEvent) -> Nil,
 ) -> Result(String, String) {
-  queue.subscribe(
+  // Set QoS prefetch=1 for fair dispatch (competing consumers pattern)
+  let Channel(pid: channel_pid) = conn.channel
+  case set_prefetch(channel_pid, 1) {
+    Ok(_) -> log.info("Set prefetch=1 for fair dispatch")
+    Error(_) ->
+      log.warn("Failed to set prefetch, messages may not distribute evenly")
+  }
+
+  // Use subscribe_with_options with AutoAck(True) to DISABLE auto-ack
+  // (confusing API: AutoAck(True) means "I will ack manually")
+  // This is required for prefetch/QoS to work!
+  queue.subscribe_with_options(
     channel: conn.channel,
     queue: conn.queue_name,
-    callback: fn(payload, _deliver) {
+    options: [queue.AutoAck(True)],
+    callback: fn(payload, deliver) {
       case json_to_event(payload.payload) {
-        Ok(event) -> callback(event)
+        Ok(event) -> {
+          callback(event)
+          // Manually acknowledge the message after processing
+          let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
+          Nil
+        }
         Error(_) -> {
           log.error("Failed to parse event from queue: " <> payload.payload)
+          // Still ack to remove bad message from queue
+          let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
           Nil
         }
       }
@@ -123,6 +144,10 @@ pub fn subscribe(
     "Failed to subscribe: " <> carotte_error_to_string(e)
   })
 }
+
+/// Set QoS prefetch count on a channel (for fair dispatch)
+@external(erlang, "rabbit_qos_ffi", "set_prefetch")
+fn set_prefetch(channel_pid: Pid, prefetch_count: Int) -> Result(Nil, String)
 
 /// Close the RabbitMQ connection
 pub fn close(conn: RabbitConnection) -> Result(Nil, String) {

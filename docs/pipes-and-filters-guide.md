@@ -1,16 +1,22 @@
 # Pipes and Filters: Step-by-Step Guide
 
-This guide walks through using Chronicle's Pipes and Filters implementation for event enrichment.
+This guide walks through using Chronicle's Pipes and Filters implementation for event processing and entity enrichment.
 
 ## Overview
 
-The Pipes and Filters pattern processes events through a sequence of composable filters:
+The Pipes and Filters pattern processes events through a sequence of composable filters. Chronicle separates concerns between **write-time** and **read-time** processing:
 
+**Ingestion Pipeline (Write Time):**
 ```
-Event → [Validate] → [Trim] → [Normalize] → [Add Correlation] → [Enrich] → Gateway
+Event → [Validate] → [Trim] → [Normalize] → [Add Correlation] → Gateway → Store
 ```
 
-Each filter transforms the event, and the enriched result is sent to the messaging gateway.
+**Hydration (Read Time):**
+```
+Store → [Lookup entity_key] → [Merge entity attributes] → Response
+```
+
+This separation ensures events always reflect **current** entity data when queried, not stale data from ingestion time.
 
 ## Quick Start
 
@@ -136,13 +142,27 @@ curl -X DELETE http://localhost:8080/entities/org:acme
 
 ## Pipeline Processing
 
-Events flow through these filters in order:
+### Ingestion Pipeline (Write Time)
+
+When events are created, they flow through the ingestion pipeline:
 
 1. **validate_required()** - Ensures actor, action, resource_type are non-empty
 2. **trim_fields()** - Removes leading/trailing whitespace
 3. **normalize_actor()** - Lowercases actor email for consistency
 4. **add_correlation_id()** - Adds UUID if not provided
-5. **enrich_from_entity()** - Looks up entity_key and merges attributes
+
+The event is then stored with its `entity_key` reference (if provided), but **not** enriched.
+
+### Hydration (Read Time)
+
+When events are queried via `GET /events`, each event is hydrated:
+
+1. Check if event has an `entity_key`
+2. Look up the entity in the entity store
+3. Merge entity attributes into event metadata
+4. Return the enriched event
+
+**Why read-time enrichment?** If you update an entity (e.g., customer upgrades their tier), all their historical events automatically reflect the new data. No need to backfill!
 
 ### Validation Errors
 
@@ -195,6 +215,24 @@ Events are now enriched with tenant metadata:
 curl http://localhost:8080/events | jq '.[] | {actor, action, tier: .metadata.tier, sla: .metadata.sla}'
 ```
 
+### Update Entity, Re-Query Events
+
+Here's the magic of read-time enrichment. Update an entity:
+
+```bash
+# Acme upgrades to platinum tier
+curl -X POST http://localhost:8080/entities -H "Content-Type: application/json" \
+  -d '{"key": "tenant:acme", "name": "Acme Corp", "attributes": {"tier": "platinum", "sla": "99.99%"}}'
+```
+
+Query the same events again:
+
+```bash
+curl http://localhost:8080/events | jq '.[] | select(.entity_key == "tenant:acme") | {actor, tier: .metadata.tier}'
+```
+
+Output now shows `"tier": "platinum"` even though the event was created when they were "enterprise"!
+
 ## Custom Pipelines
 
 You can create custom filter pipelines in Gleam:
@@ -203,7 +241,7 @@ You can create custom filter pipelines in Gleam:
 import auditor/filters
 import auditor/pipeline
 
-// Custom pipeline with additional validation
+// Custom ingestion pipeline with additional validation
 let my_pipeline = pipeline.from_filters([
   filters.validate_required(),
   filters.validate_actor_email(),  // Must contain @
@@ -212,18 +250,34 @@ let my_pipeline = pipeline.from_filters([
   filters.normalize_action(),      // Also lowercase action
   filters.add_correlation_id(),
   filters.add_source("my-service"),
-  filters.enrich_from_entity(entity_store),
   filters.log_event("[audit]"),
 ])
 
 // Process an event
 case pipeline.process(my_pipeline, event) {
-  Ok(enriched) -> // Send to gateway
+  Ok(processed) -> // Send to gateway (entity_key is stored, not enriched)
   Error(reason) -> // Handle rejection
 }
 ```
 
+### Write-Time Enrichment (Advanced)
+
+If you need write-time enrichment for a specific use case (e.g., event archival where you want a snapshot), the `enrich_from_entity` filter is still available:
+
+```gleam
+// Custom pipeline with write-time enrichment (denormalizes entity data)
+let snapshot_pipeline = pipeline.from_filters([
+  filters.validate_required(),
+  filters.trim_fields(),
+  filters.enrich_from_entity(entity_store),  // Bakes in entity data
+])
+```
+
+**Note:** This creates a snapshot of entity data at ingestion time. The stored event won't reflect future entity updates.
+
 ## Architecture
+
+### Write Path (Ingestion)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -233,23 +287,60 @@ case pipeline.process(my_pipeline, event) {
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Processing Pipeline                          │
-│  ┌──────────┐ ┌──────┐ ┌───────────┐ ┌─────────┐ ┌──────────┐  │
-│  │ Validate │→│ Trim │→│ Normalize │→│ Add CID │→│ Enrich   │  │
-│  └──────────┘ └──────┘ └───────────┘ └─────────┘ └────┬─────┘  │
-│                                                       │         │
-│                                          ┌────────────┘         │
-│                                          ▼                      │
-│                                    ┌──────────┐                 │
-│                                    │ Entity   │                 │
-│                                    │ Store    │                 │
-│                                    └──────────┘                 │
+│              Ingestion Pipeline (Write Time)                    │
+│  ┌──────────┐ ┌──────┐ ┌───────────┐ ┌─────────┐               │
+│  │ Validate │→│ Trim │→│ Normalize │→│ Add CID │               │
+│  └──────────┘ └──────┘ └───────────┘ └─────────┘               │
+│                                                                 │
+│  NOTE: No enrichment here! entity_key is stored as a reference │
 └─────────────────────┬───────────────────────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Messaging Gateway                            │
 │              (OTP Channel or RabbitMQ)                          │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Event Store (ETS)                          │
+│     { id, actor, action, ..., entity_key, metadata: {} }       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Read Path (Hydration)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      GET /events                                │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Event Store (ETS)                          │
+│               Read events from storage                          │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 Hydration (Read Time)                           │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │  For each event with entity_key:                          │ │
+│  │    1. Lookup entity by key                                │ │
+│  │    2. Merge entity.attributes into event.metadata         │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                          │                                      │
+│                          ▼                                      │
+│                   ┌──────────┐                                  │
+│                   │ Entity   │ ← Current entity data            │
+│                   │ Store    │                                  │
+│                   └──────────┘                                  │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    JSON Response                                │
+│     { ..., metadata: { entity_name, tier, region, ... } }      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

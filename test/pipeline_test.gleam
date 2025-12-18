@@ -1,9 +1,10 @@
 //// Unit tests for the Pipes and Filters Pipeline
 ////
-//// Tests the pipeline processing, filter chaining, and error handling.
+//// Tests filter chaining using Gleam's pipe operator and result.try
 
 import auditor/event
-import auditor/pipeline.{Continue, Reject, Skip}
+import auditor/pipeline
+import gleam/result
 import gleam/string
 import gleeunit/should
 
@@ -23,209 +24,136 @@ fn make_event() -> event.AuditEvent {
 }
 
 // =============================================================================
-// Basic Pipeline Tests
+// Direct Pipe Tests (the idiomatic way!)
 // =============================================================================
 
-pub fn empty_pipeline_returns_event_unchanged_test() {
-  let evt = make_event()
-  let pipe = pipeline.new()
-
-  pipeline.process(pipe, evt)
-  |> should.be_ok
-  |> fn(result) { result.id |> should.equal("evt-123") }
-}
-
-pub fn single_filter_transforms_event_test() {
-  let evt = make_event()
-
+pub fn direct_pipe_transforms_event_test() {
   let uppercase_actor = fn(e: event.AuditEvent) {
-    Continue(event.AuditEvent(..e, actor: string.uppercase(e.actor)))
+    Ok(event.AuditEvent(..e, actor: string.uppercase(e.actor)))
   }
 
-  let pipe = pipeline.from_filters([uppercase_actor])
-
-  pipeline.process(pipe, evt)
+  make_event()
+  |> uppercase_actor
   |> should.be_ok
   |> fn(result) { result.actor |> should.equal("TEST@EXAMPLE.COM") }
 }
 
-pub fn multiple_filters_chain_correctly_test() {
-  let evt = make_event()
-
+pub fn chained_pipes_transform_sequentially_test() {
   let uppercase_actor = fn(e: event.AuditEvent) {
-    Continue(event.AuditEvent(..e, actor: string.uppercase(e.actor)))
+    Ok(event.AuditEvent(..e, actor: string.uppercase(e.actor)))
   }
 
   let uppercase_action = fn(e: event.AuditEvent) {
-    Continue(event.AuditEvent(..e, action: string.uppercase(e.action)))
+    Ok(event.AuditEvent(..e, action: string.uppercase(e.action)))
   }
 
-  let pipe = pipeline.from_filters([uppercase_actor, uppercase_action])
+  let result =
+    Ok(make_event())
+    |> result.try(uppercase_actor)
+    |> result.try(uppercase_action)
+    |> should.be_ok
 
-  let result = pipeline.process(pipe, evt) |> should.be_ok
   result.actor |> should.equal("TEST@EXAMPLE.COM")
   result.action |> should.equal("CREATE")
 }
 
-// =============================================================================
-// Filter Result Tests
-// =============================================================================
-
-pub fn reject_stops_pipeline_test() {
-  let evt = make_event()
-
-  let always_reject = fn(_e: event.AuditEvent) {
-    Reject("not allowed")
-  }
+pub fn error_stops_pipeline_test() {
+  let always_fail = fn(_e: event.AuditEvent) { Error("not allowed") }
 
   let should_not_run = fn(_e: event.AuditEvent) {
-    // This should never be called
-    Continue(event.AuditEvent(..make_event(), id: "should-not-see-this"))
+    Ok(event.AuditEvent(..make_event(), id: "should-not-see-this"))
   }
 
-  let pipe = pipeline.from_filters([always_reject, should_not_run])
-
-  pipeline.process(pipe, evt)
+  Ok(make_event())
+  |> result.try(always_fail)
+  |> result.try(should_not_run)
   |> should.be_error
-  |> should.equal("Rejected: not allowed")
+  |> should.equal("not allowed")
 }
 
-pub fn skip_stops_pipeline_test() {
-  let evt = make_event()
-
-  let skip_filter = fn(_e: event.AuditEvent) {
-    Skip("event filtered out")
-  }
-
-  let pipe = pipeline.from_filters([skip_filter])
-
-  pipeline.process(pipe, evt)
-  |> should.be_error
-  |> should.equal("Skipped: event filtered out")
-}
-
-pub fn continue_passes_to_next_filter_test() {
-  let evt = make_event()
-
-  // We can't easily track call count in Gleam without mutable state,
-  // so we'll verify by checking the final transformation
+pub fn ok_continues_pipeline_test() {
   let add_meta_1 = fn(e: event.AuditEvent) {
-    Continue(event.with_metadata(e, "filter1", "ran"))
+    Ok(event.with_metadata(e, "filter1", "ran"))
   }
 
   let add_meta_2 = fn(e: event.AuditEvent) {
-    Continue(event.with_metadata(e, "filter2", "ran"))
+    Ok(event.with_metadata(e, "filter2", "ran"))
   }
 
-  let pipe = pipeline.from_filters([add_meta_1, add_meta_2])
+  let evt = make_event()
 
-  let result = pipeline.process(pipe, evt) |> should.be_ok
+  let result =
+    Ok(evt)
+    |> result.try(add_meta_1)
+    |> result.try(add_meta_2)
+    |> should.be_ok
 
   // Both filters should have run
-  result.metadata
-  |> should.not_equal(evt.metadata)
-}
-
-// =============================================================================
-// Pipeline Composition Tests
-// =============================================================================
-
-pub fn compose_combines_pipelines_test() {
-  let evt = make_event()
-
-  let pipe_a =
-    pipeline.from_filters([
-      fn(e) { Continue(event.with_metadata(e, "a", "1")) },
-    ])
-
-  let pipe_b =
-    pipeline.from_filters([
-      fn(e) { Continue(event.with_metadata(e, "b", "2")) },
-    ])
-
-  let combined = pipeline.compose(pipe_a, pipe_b)
-
-  let result = pipeline.process(combined, evt) |> should.be_ok
-
-  // Both pipeline's filters should have run
-  result.metadata |> should.not_equal(evt.metadata)
-}
-
-pub fn add_appends_filter_test() {
-  let evt = make_event()
-
-  let pipe =
-    pipeline.new()
-    |> pipeline.add(fn(e) { Continue(event.with_metadata(e, "added", "yes")) })
-
-  let result = pipeline.process(pipe, evt) |> should.be_ok
   result.metadata |> should.not_equal(evt.metadata)
 }
 
 // =============================================================================
-// Helper Function Tests
+// List Runner Tests (for dynamic composition)
 // =============================================================================
 
-pub fn from_transform_creates_filter_test() {
+pub fn run_with_empty_list_returns_event_test() {
   let evt = make_event()
 
-  let filter =
-    pipeline.from_transform(fn(e) {
-      event.AuditEvent(..e, action: "transformed")
-    })
-
-  let pipe = pipeline.from_filters([filter])
-
-  pipeline.process(pipe, evt)
+  pipeline.run(evt, [])
   |> should.be_ok
-  |> fn(result) { result.action |> should.equal("transformed") }
+  |> fn(result) { result.id |> should.equal("evt-123") }
 }
 
-pub fn from_validator_creates_filter_test() {
-  // Test passing validation
+pub fn run_with_single_filter_test() {
   let evt = make_event()
 
-  let validator =
-    pipeline.from_validator(fn(e: event.AuditEvent) {
-      case e.actor {
-        "" -> Error("actor is required")
-        _ -> Ok(Nil)
-      }
-    })
-
-  let pipe = pipeline.from_filters([validator])
-
-  pipeline.process(pipe, evt)
-  |> should.be_ok
-
-  // Test failing validation
-  let bad_evt = event.AuditEvent(..evt, actor: "")
-
-  pipeline.process(pipe, bad_evt)
-  |> should.be_error
-  |> should.equal("Rejected: actor is required")
-}
-
-pub fn passthrough_does_nothing_test() {
-  let evt = make_event()
-
-  let pipe = pipeline.from_filters([pipeline.passthrough()])
-
-  pipeline.process(pipe, evt)
-  |> should.be_ok
-  |> fn(result) { result |> should.equal(evt) }
-}
-
-pub fn process_lenient_returns_original_on_error_test() {
-  let evt = make_event()
-
-  let always_reject = fn(_e: event.AuditEvent) {
-    Reject("nope")
+  let uppercase_actor = fn(e: event.AuditEvent) {
+    Ok(event.AuditEvent(..e, actor: string.uppercase(e.actor)))
   }
 
-  let pipe = pipeline.from_filters([always_reject])
-
-  pipeline.process_lenient(pipe, evt)
-  |> should.equal(evt)
+  pipeline.run(evt, [uppercase_actor])
+  |> should.be_ok
+  |> fn(result) { result.actor |> should.equal("TEST@EXAMPLE.COM") }
 }
 
+pub fn run_chains_multiple_filters_test() {
+  let evt = make_event()
+
+  let uppercase_actor = fn(e: event.AuditEvent) {
+    Ok(event.AuditEvent(..e, actor: string.uppercase(e.actor)))
+  }
+
+  let uppercase_action = fn(e: event.AuditEvent) {
+    Ok(event.AuditEvent(..e, action: string.uppercase(e.action)))
+  }
+
+  let result =
+    pipeline.run(evt, [uppercase_actor, uppercase_action])
+    |> should.be_ok
+
+  result.actor |> should.equal("TEST@EXAMPLE.COM")
+  result.action |> should.equal("CREATE")
+}
+
+pub fn run_stops_on_error_test() {
+  let evt = make_event()
+
+  let always_fail = fn(_e: event.AuditEvent) { Error("nope") }
+
+  let should_not_run = fn(_e: event.AuditEvent) {
+    Ok(event.AuditEvent(..make_event(), id: "should-not-see-this"))
+  }
+
+  pipeline.run(evt, [always_fail, should_not_run])
+  |> should.be_error
+  |> should.equal("nope")
+}
+
+pub fn run_lenient_returns_original_on_error_test() {
+  let evt = make_event()
+
+  let always_fail = fn(_e: event.AuditEvent) { Error("nope") }
+
+  pipeline.run_lenient(evt, [always_fail])
+  |> should.equal(evt)
+}

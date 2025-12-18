@@ -13,7 +13,6 @@ import auditor/event
 import auditor/filters
 import auditor/gateway.{type ConsumerPool, type Gateway}
 import auditor/log
-import auditor/pipeline
 import auditor/store.{type Table}
 import birl
 import gleam/dict
@@ -111,10 +110,9 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
           entity_key,
         )
 
-      // Process through the enrichment pipeline
-      let pipe = filters.enrichment_pipeline(ctx.entity_store)
-
-      case pipeline.process(pipe, raw_event) {
+      // Process through the ingestion pipeline (validate/normalize, no enrichment)
+      // Enrichment happens at read time, not write time
+      case filters.ingest(raw_event) {
         Ok(processed_event) -> {
           // Send through the gateway
           gateway.send_event(ctx.gateway, processed_event)
@@ -161,17 +159,43 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
   }
 }
 
-/// GET /events - list all events
+/// GET /events - list all events, hydrated with entity data
 fn list_events(ctx: Context) -> WispResponse {
   let events = store.list_all(ctx.store)
 
-  let events_json =
+  // Hydrate events with current entity data at read time
+  let hydrated_events =
     events
+    |> list.map(fn(evt) { hydrate_event(evt, ctx.entity_store) })
+
+  let events_json =
+    hydrated_events
     |> list.map(event.to_json)
     |> json.preprocessed_array
 
   wisp.ok()
   |> wisp.json_body(json.to_string(events_json))
+}
+
+/// Hydrate an event with entity data at read time
+/// This ensures events always reflect current entity state
+fn hydrate_event(evt: event.AuditEvent, entity_table: EntityTable) -> event.AuditEvent {
+  case evt.entity_key {
+    Some(key) -> {
+      case entity_store.get(entity_table, key) {
+        Ok(ent) -> {
+          // Merge entity attributes into event metadata
+          let enriched_metadata =
+            evt.metadata
+            |> dict.insert("entity_name", ent.name)
+            |> dict.merge(ent.attributes)
+          event.AuditEvent(..evt, metadata: enriched_metadata)
+        }
+        Error(Nil) -> evt  // Entity not found, return as-is
+      }
+    }
+    None -> evt
+  }
 }
 
 // =============================================================================

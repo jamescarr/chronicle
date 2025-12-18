@@ -5,110 +5,41 @@
 //// > independent processing steps (Filters) that are connected by
 //// > channels (Pipes)."
 ////
-//// A Pipeline chains Filters together. Each Filter transforms an event,
-//// potentially enriching, validating, or modifying it. The output of
-//// one filter becomes the input to the next.
+//// Filters are just functions! Chain them with Gleam's pipe operator
+//// and result.try for clean, composable event processing.
 ////
 //// Example:
-////   event
-////   |> validate_required()    -- ensure required fields present
-////   |> normalize_actor()      -- lowercase email
-////   |> add_correlation_id()   -- add tracing ID if missing
-////   |> enrich_from_entity()   -- lookup entity metadata
-////   |> log_event()            -- log for debugging
+////   Ok(event)
+////   |> result.try(validate_required)
+////   |> result.try(trim_fields)
+////   |> result.try(normalize_actor)
+////   |> result.try(add_correlation_id)
 
 import auditor/event.{type AuditEvent}
-import gleam/list
 import gleam/result
 
-/// Result of applying a filter
-pub type FilterResult {
-  /// Event was transformed successfully
-  Continue(event: AuditEvent)
-  /// Event failed validation - stop processing
-  Reject(reason: String)
-  /// Event should be skipped (not an error, just filtered out)
-  Skip(reason: String)
-}
-
-/// A Filter transforms an event and returns a FilterResult
+/// A Filter is simply a function that transforms an event or returns an error
 pub type Filter =
-  fn(AuditEvent) -> FilterResult
+  fn(AuditEvent) -> Result(AuditEvent, String)
 
-/// A Pipeline is an ordered list of filters
-pub type Pipeline =
-  List(Filter)
-
-/// Create an empty pipeline
-pub fn new() -> Pipeline {
-  []
-}
-
-/// Add a filter to the pipeline
-pub fn add(pipeline: Pipeline, filter: Filter) -> Pipeline {
-  list.append(pipeline, [filter])
-}
-
-/// Chain multiple filters into a pipeline
-pub fn from_filters(filters: List(Filter)) -> Pipeline {
-  filters
-}
-
-/// Process an event through all filters in the pipeline
-/// Returns Ok(event) if successful, Error with reason if rejected/skipped
-pub fn process(
-  pipeline: Pipeline,
+/// Process an event through a chain of filters
+/// This is just for convenience - you can also pipe directly with result.try
+pub fn run(
   event: AuditEvent,
+  filters: List(Filter),
 ) -> Result(AuditEvent, String) {
-  do_process(pipeline, event)
-}
-
-fn do_process(
-  remaining: List(Filter),
-  event: AuditEvent,
-) -> Result(AuditEvent, String) {
-  case remaining {
+  case filters {
     [] -> Ok(event)
     [filter, ..rest] -> {
-      case filter(event) {
-        Continue(transformed) -> do_process(rest, transformed)
-        Reject(reason) -> Error("Rejected: " <> reason)
-        Skip(reason) -> Error("Skipped: " <> reason)
-      }
+      filter(event)
+      |> result.try(fn(e) { run(e, rest) })
     }
   }
 }
 
 /// Process an event, returning the original on error (lenient mode)
-pub fn process_lenient(pipeline: Pipeline, event: AuditEvent) -> AuditEvent {
-  process(pipeline, event)
+pub fn run_lenient(event: AuditEvent, filters: List(Filter)) -> AuditEvent {
+  run(event, filters)
   |> result.unwrap(event)
-}
-
-/// Compose two pipelines into one
-pub fn compose(a: Pipeline, b: Pipeline) -> Pipeline {
-  list.flatten([a, b])
-}
-
-/// Create a filter that always continues with the event unchanged
-pub fn passthrough() -> Filter {
-  fn(event) { Continue(event) }
-}
-
-/// Create a filter from a simple transform function
-pub fn from_transform(f: fn(AuditEvent) -> AuditEvent) -> Filter {
-  fn(event) { Continue(f(event)) }
-}
-
-/// Create a filter from a validation function
-pub fn from_validator(
-  f: fn(AuditEvent) -> Result(Nil, String),
-) -> Filter {
-  fn(event) {
-    case f(event) {
-      Ok(Nil) -> Continue(event)
-      Error(reason) -> Reject(reason)
-    }
-  }
 }
 
