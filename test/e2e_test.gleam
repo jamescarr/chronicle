@@ -2,8 +2,9 @@
 ////
 //// These tests start a real server and make HTTP requests to verify behavior.
 
-import auditor/channel
-import auditor/consumer
+import auditor/config
+import auditor/entity_store
+import auditor/gateway
 import auditor/router.{Context}
 import auditor/store
 import gleam/dynamic/decode
@@ -13,6 +14,7 @@ import gleam/http/request
 import gleam/httpc
 import gleam/json
 import gleam/list
+import gleam/result
 import gleam/string
 import gleeunit/should
 import mist
@@ -26,11 +28,24 @@ const base_url = "http://localhost:9999"
 /// Start the server for testing
 fn start_test_server() -> Nil {
   let table = store.init()
-  let assert Ok(channel_started) = channel.start()
-  let consumers = consumer.start_pool(2, channel_started.data, table)
+  let entities = entity_store.init()
+
+  // Use default OTP transport for tests
+  let cfg = config.load()
+  let assert Ok(gateway_result) = gateway.start(cfg)
+
+  // Start consumers through the gateway - clean abstraction!
+  let consumer_pool =
+    gateway.start_consumers(gateway_result.gateway, 2, table)
+    |> result.replace_error(Nil)
 
   let ctx =
-    Context(channel: channel_started.data, store: table, consumers: consumers)
+    Context(
+      gateway: gateway_result.gateway,
+      store: table,
+      entity_store: entities,
+      consumer_pool: consumer_pool,
+    )
 
   let secret_key_base = wisp.random_string(64)
   let handler = fn(req) { router.handle_request(req, ctx) }
