@@ -4,6 +4,17 @@
 # Transport adapter: "otp" (default) or "rabbitmq"
 transport := env("CHRONICLE_TRANSPORT", "otp")
 
+# Store backend: "postgres" (default) or "ets"
+store := env("CHRONICLE_STORE", "postgres")
+
+# PostgreSQL connection defaults
+pg_host := env("POSTGRES_HOST", "localhost")
+pg_port := env("POSTGRES_PORT", "5432")
+pg_user := env("POSTGRES_USER", "chronicle")
+pg_pass := env("POSTGRES_PASSWORD", "chronicle")
+pg_db := env("POSTGRES_DATABASE", "chronicle")
+database_url := env("DATABASE_URL", "postgresql://" + pg_user + ":" + pg_pass + "@" + pg_host + ":" + pg_port + "/" + pg_db)
+
 # Default: show available commands
 default:
     @just --list --unsorted
@@ -51,15 +62,39 @@ cookie := "chronicle_dev"
 
 [group('run')]
 run:
-    ERL_FLAGS="-sname chronicle -setcookie {{cookie}}" CHRONICLE_TRANSPORT={{transport}} gleam run
+    ERL_FLAGS="-sname chronicle -setcookie {{cookie}}" \
+    CHRONICLE_TRANSPORT={{transport}} \
+    CHRONICLE_STORE={{store}} \
+    POSTGRES_HOST={{pg_host}} \
+    POSTGRES_PORT={{pg_port}} \
+    POSTGRES_USER={{pg_user}} \
+    POSTGRES_PASSWORD={{pg_pass}} \
+    POSTGRES_DATABASE={{pg_db}} \
+    gleam run
 
 [group('run')]
 producer:
-    ERL_FLAGS="-sname producer -setcookie {{cookie}}" CHRONICLE_TRANSPORT={{transport}} CHRONICLE_MODE=producer gleam run
+    ERL_FLAGS="-sname producer -setcookie {{cookie}}" \
+    CHRONICLE_TRANSPORT={{transport}} \
+    CHRONICLE_STORE={{store}} \
+    POSTGRES_HOST={{pg_host}} \
+    POSTGRES_PORT={{pg_port}} \
+    POSTGRES_USER={{pg_user}} \
+    POSTGRES_PASSWORD={{pg_pass}} \
+    POSTGRES_DATABASE={{pg_db}} \
+    CHRONICLE_MODE=producer gleam run
 
 [group('run')]
 consumer:
-    ERL_FLAGS="-sname consumer1 -setcookie {{cookie}}" CHRONICLE_TRANSPORT={{transport}} CHRONICLE_MODE=consumer gleam run
+    ERL_FLAGS="-sname consumer1 -setcookie {{cookie}}" \
+    CHRONICLE_TRANSPORT={{transport}} \
+    CHRONICLE_STORE={{store}} \
+    POSTGRES_HOST={{pg_host}} \
+    POSTGRES_PORT={{pg_port}} \
+    POSTGRES_USER={{pg_user}} \
+    POSTGRES_PASSWORD={{pg_pass}} \
+    POSTGRES_DATABASE={{pg_db}} \
+    CHRONICLE_MODE=consumer gleam run
 
 # Start multiple consumers: `just consumers 3` or `just transport=rabbitmq consumers 5`
 [group('run')]
@@ -71,6 +106,12 @@ consumers count="3":
         echo "Starting consumer$i..."
         ERL_FLAGS="-sname consumer$i -setcookie {{cookie}}" \
         CHRONICLE_TRANSPORT={{transport}} \
+        CHRONICLE_STORE={{store}} \
+        POSTGRES_HOST={{pg_host}} \
+        POSTGRES_PORT={{pg_port}} \
+        POSTGRES_USER={{pg_user}} \
+        POSTGRES_PASSWORD={{pg_pass}} \
+        POSTGRES_DATABASE={{pg_db}} \
         CHRONICLE_MODE=consumer \
         gleam run &
         sleep 0.5  # Give each node time to register
@@ -82,10 +123,39 @@ consumers count="3":
 
 [group('run')]
 watch:
-    ERL_FLAGS="-sname chronicle -setcookie {{cookie}}" CHRONICLE_TRANSPORT={{transport}} watchexec -e gleam -r -- gleam run
+    ERL_FLAGS="-sname chronicle -setcookie {{cookie}}" \
+    CHRONICLE_TRANSPORT={{transport}} \
+    CHRONICLE_STORE={{store}} \
+    POSTGRES_HOST={{pg_host}} \
+    POSTGRES_PORT={{pg_port}} \
+    POSTGRES_USER={{pg_user}} \
+    POSTGRES_PASSWORD={{pg_pass}} \
+    POSTGRES_DATABASE={{pg_db}} \
+    watchexec -e gleam -r -- gleam run
 
 [group('run')]
 dev: deps build run
+
+# Full setup: start services, run migrations, then run the app
+[group('run')]
+setup: services-up
+    @echo "Waiting for services to be ready..."
+    @sleep 3
+    @just migrate
+    @echo "Setup complete! Run 'just run' to start the app"
+
+# Start all infrastructure services
+[group('run')]
+services-up:
+    docker-compose up -d
+    @echo "Services starting..."
+    @echo "PostgreSQL: postgresql://{{pg_user}}:{{pg_pass}}@{{pg_host}}:{{pg_port}}/{{pg_db}}"
+    @echo "RabbitMQ: http://localhost:15672 (guest/guest)"
+
+# Stop all infrastructure services
+[group('run')]
+services-down:
+    docker-compose down
 
 [group('run')]
 kill:
@@ -113,6 +183,33 @@ which-transport:
     @echo "To change, either:"
     @echo "  export CHRONICLE_TRANSPORT=rabbitmq"
     @echo "  just transport=rabbitmq run"
+
+# =============================================================================
+# Store Shortcuts
+# =============================================================================
+
+[group('store')]
+ets-mode:
+    CHRONICLE_STORE=ets gleam run
+
+[group('store')]
+postgres-mode:
+    CHRONICLE_STORE=postgres \
+    POSTGRES_HOST={{pg_host}} \
+    POSTGRES_PORT={{pg_port}} \
+    POSTGRES_USER={{pg_user}} \
+    POSTGRES_PASSWORD={{pg_pass}} \
+    POSTGRES_DATABASE={{pg_db}} \
+    gleam run
+
+[group('store')]
+which-store:
+    @echo "Current store: {{store}}"
+    @echo "Database URL:  {{database_url}}"
+    @echo ""
+    @echo "To change, either:"
+    @echo "  export CHRONICLE_STORE=ets"
+    @echo "  just store=ets run"
 
 # =============================================================================
 # API Testing
@@ -240,6 +337,106 @@ rabbit-clean:
     @echo "RabbitMQ data cleaned"
 
 # =============================================================================
+# Database Migrations (cigogne)
+# =============================================================================
+
+# Run all pending migrations
+[group('db')]
+migrate:
+    DATABASE_URL={{database_url}} gleam run -m cigogne all
+
+# Run next pending migration
+[group('db')]
+migrate-up:
+    DATABASE_URL={{database_url}} gleam run -m cigogne up
+
+# Run N pending migrations
+[group('db')]
+migrate-up-n count="1":
+    DATABASE_URL={{database_url}} gleam run -m cigogne up --count {{count}}
+
+# Rollback last migration
+[group('db')]
+migrate-down:
+    DATABASE_URL={{database_url}} gleam run -m cigogne down
+
+# Rollback N migrations
+[group('db')]
+migrate-down-n count="1":
+    DATABASE_URL={{database_url}} gleam run -m cigogne down --count {{count}}
+
+# Show migration status
+[group('db')]
+migrate-status:
+    DATABASE_URL={{database_url}} gleam run -m cigogne show
+
+# Show unapplied migrations
+[group('db')]
+migrate-pending:
+    DATABASE_URL={{database_url}} gleam run -m cigogne print-unapplied
+
+# Create a new migration file
+[group('db')]
+migrate-new name:
+    gleam run -m cigogne new --name {{name}}
+
+# Initialize cigogne config (creates priv/cigogne.toml)
+[group('db')]
+migrate-init:
+    gleam run -m cigogne init
+
+# =============================================================================
+# PostgreSQL Infrastructure
+# =============================================================================
+
+# Start PostgreSQL (and RabbitMQ)
+[group('postgres')]
+pg-up:
+    docker-compose up -d postgres
+    @echo "PostgreSQL starting..."
+    @echo "Connection: postgresql://{{pg_user}}:{{pg_pass}}@{{pg_host}}:{{pg_port}}/{{pg_db}}"
+
+# Stop PostgreSQL
+[group('postgres')]
+pg-down:
+    docker-compose stop postgres
+
+# View PostgreSQL logs
+[group('postgres')]
+pg-logs:
+    docker-compose logs -f postgres
+
+# Connect to PostgreSQL CLI
+[group('postgres')]
+pg-shell:
+    docker-compose exec postgres psql -U {{pg_user}} -d {{pg_db}}
+
+# Reset PostgreSQL (WARNING: destroys all data)
+[group('postgres')]
+pg-reset:
+    docker-compose down -v postgres
+    docker-compose up -d postgres
+    @echo "Waiting for PostgreSQL to start..."
+    @sleep 3
+    @just migrate
+    @echo "PostgreSQL reset complete"
+
+# Show table info
+[group('postgres')]
+pg-tables:
+    docker-compose exec postgres psql -U {{pg_user}} -d {{pg_db}} -c '\dt'
+
+# Count events in database
+[group('postgres')]
+pg-count:
+    docker-compose exec postgres psql -U {{pg_user}} -d {{pg_db}} -c 'SELECT COUNT(*) FROM audit_events;'
+
+# Show recent events
+[group('postgres')]
+pg-events count="10":
+    docker-compose exec postgres psql -U {{pg_user}} -d {{pg_db}} -c 'SELECT id, actor, action, resource_type, timestamp FROM audit_events ORDER BY timestamp DESC LIMIT {{count}};'
+
+# =============================================================================
 # Debug - Erlang shell & ETS inspection
 # =============================================================================
 
@@ -315,17 +512,30 @@ nodes:
 info:
     @echo "Chronicle - Audit Logging System"
     @echo ""
-    @echo "Current transport: {{transport}}"
+    @echo "Configuration:"
+    @echo "  Transport: {{transport}}"
+    @echo "  Store:     {{store}}"
+    @echo "  Database:  {{database_url}}"
     @echo ""
     @echo "Gleam version:"
     @gleam --version
     @echo ""
-    @echo "Project structure:"
-    @ls -la src/auditor/
+    @echo "Quick start:"
+    @echo "  just setup              - Start services, run migrations"
+    @echo "  just run                - Run the app (postgres by default)"
+    @echo "  just store=ets run      - Run with in-memory ETS store"
+    @echo ""
+    @echo "Migration commands:"
+    @echo "  just migrate            - Run all pending migrations"
+    @echo "  just migrate-status     - Show migration status"
+    @echo "  just migrate-new NAME   - Create new migration"
+    @echo ""
+    @echo "Database commands:"
+    @echo "  just pg-up              - Start PostgreSQL"
+    @echo "  just pg-shell           - Connect to PostgreSQL CLI"
+    @echo "  just pg-events          - Show recent events"
     @echo ""
     @echo "Debug commands:"
     @echo "  just shell              - Connect to chronicle node"
-    @echo "  just shell consumer1    - Connect to consumer1 node"
     @echo "  just ets                - List ETS tables on chronicle"
-    @echo "  just events-dump        - Dump events from chronicle"
     @echo "  just nodes              - List running Erlang nodes"

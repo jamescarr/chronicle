@@ -1,0 +1,26 @@
+# Chronicle - Database Migration Configuration
+# This file configures cigogne for PostgreSQL migrations
+
+[database]
+# Database connection can be configured here or via DATABASE_URL environment variable
+# Uncomment and set values for local development:
+# host = "localhost"
+# user = "chronicle"
+# password = "chronicle"
+# port = 5432
+# name = "chronicle"
+
+# Or use a connection URL:
+# url = "postgresql://chronicle:chronicle@localhost:5432/chronicle"
+
+# By default, cigogne reads from DATABASE_URL environment variable
+
+[migration-table]
+# schema = "public"
+# table = "migrations"
+
+[migrations]
+# migration_folder = "migrations"
+
+[migrations.dependencies]
+
