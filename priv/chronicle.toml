@@ -1,0 +1,104 @@
+# Chronicle Message Routing Configuration
+# ============================================================================
+# This file defines message routes, exchanges, queues, and consumer roles.
+# Chronicle will automatically create the RabbitMQ topology on startup.
+
+[rabbitmq]
+host = "localhost"
+port = 5672
+user = "guest"
+password = "guest"
+vhost = "/"
+
+# ============================================================================
+# Exchanges
+# ============================================================================
+# Define the exchanges used for message routing.
+# Types: "topic" (pattern matching), "fanout" (broadcast), "direct" (exact match)
+
+[exchanges.audit_events]
+type = "topic"
+durable = true
+description = "Main exchange for all audit events"
+
+[exchanges.dead_letter]
+type = "fanout"
+durable = true
+description = "Dead letter exchange for failed messages"
+
+# ============================================================================
+# Routes
+# ============================================================================
+# Routes define how events flow from exchanges to queues based on routing keys.
+# Routing keys are derived from event_type (e.g., "security.login", "user.created")
+
+[[routes]]
+name = "security_events"
+description = "Security-related audit events (login, logout, auth failures)"
+exchange = "audit_events"
+queue = "chronicle.security"
+routing_key = "security.#"
+dead_letter_exchange = "dead_letter"
+dead_letter_queue = "chronicle.security.dlq"
+
+[[routes]]
+name = "user_events"
+description = "User lifecycle events (created, updated, deleted)"
+exchange = "audit_events"
+queue = "chronicle.users"
+routing_key = "user.#"
+dead_letter_exchange = "dead_letter"
+dead_letter_queue = "chronicle.users.dlq"
+
+[[routes]]
+name = "billing_events"
+description = "Billing and payment events"
+exchange = "audit_events"
+queue = "chronicle.billing"
+routing_key = "billing.#"
+dead_letter_exchange = "dead_letter"
+dead_letter_queue = "chronicle.billing.dlq"
+
+[[routes]]
+name = "all_events"
+description = "Catch-all route for analytics and archival"
+exchange = "audit_events"
+queue = "chronicle.all"
+routing_key = "#"
+
+# ============================================================================
+# Consumers
+# ============================================================================
+# Named consumer roles that can be started independently.
+# Each consumer subscribes to one or more routes.
+
+[[consumers]]
+name = "security"
+description = "Security team consumer - handles auth and access events"
+routes = ["security_events"]
+instances = 2
+
+[[consumers]]
+name = "analytics"
+description = "Analytics pipeline - receives all events for reporting"
+routes = ["all_events"]
+instances = 1
+
+[[consumers]]
+name = "billing"
+description = "Billing system consumer"
+routes = ["billing_events"]
+instances = 1
+
+[[consumers]]
+name = "users"
+description = "User service consumer"
+routes = ["user_events"]
+instances = 1
+
+[[consumers]]
+name = "default"
+description = "Default consumer - handles all event types"
+routes = ["security_events", "user_events", "billing_events"]
+instances = 3
+

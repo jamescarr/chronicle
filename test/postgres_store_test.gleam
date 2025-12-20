@@ -5,7 +5,6 @@
 
 import auditor/event
 import auditor/event_store
-import gleam/dict
 import gleam/list
 import gleam/option.{Some}
 import gleeunit/should
@@ -105,31 +104,48 @@ pub fn postgres_duplicate_insert_is_idempotent_test() {
 
 pub fn postgres_preserves_all_fields_test() {
   let store = event_store.create_postgres(test_pg_config())
-  
+
   let test_id = "pg-fields-" <> random_suffix()
-  let original = event.AuditEvent(
-    id: test_id,
-    actor: "alice@company.com",
-    action: "archive",
-    resource_type: "document",
-    resource_id: "doc-789",
-    timestamp: "2025-12-20T15:30:00.000Z",
-    correlation_id: Some("corr-123"),
-    entity_key: Some("org:acme"),
-    metadata: dict.from_list([#("source", "test")]),
-  )
-  
-  event_store.insert(store, original) |> should.be_true
-  
+  // Use the new_with_type constructor and add enrichment fields
+  let original =
+    event.new_with_type(
+      test_id,
+      "alice@company.com",
+      "archive",
+      "document",
+      "doc-789",
+      "2025-12-20T15:30:00.000Z",
+      "document.archive",
+    )
+    |> fn(evt) {
+      event.AuditEvent(
+        ..evt,
+        correlation_id: Some("corr-123"),
+        entity_key: Some("org:acme"),
+      )
+    }
+
+  event_store.insert(store, original)
+  |> should.be_true
+
   let assert Ok(retrieved) = event_store.get(store, test_id)
-  
-  retrieved.id |> should.equal(test_id)
-  retrieved.actor |> should.equal("alice@company.com")
-  retrieved.action |> should.equal("archive")
-  retrieved.resource_type |> should.equal("document")
-  retrieved.resource_id |> should.equal("doc-789")
-  retrieved.correlation_id |> should.equal(Some("corr-123"))
-  retrieved.entity_key |> should.equal(Some("org:acme"))
+
+  retrieved.id
+  |> should.equal(test_id)
+  retrieved.actor
+  |> should.equal("alice@company.com")
+  retrieved.action
+  |> should.equal("archive")
+  retrieved.resource_type
+  |> should.equal("document")
+  retrieved.resource_id
+  |> should.equal("doc-789")
+  retrieved.event_type
+  |> should.equal(Some("document.archive"))
+  retrieved.correlation_id
+  |> should.equal(Some("corr-123"))
+  retrieved.entity_key
+  |> should.equal(Some("org:acme"))
 }
 
 // =============================================================================

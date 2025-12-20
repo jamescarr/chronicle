@@ -154,8 +154,8 @@ fn pg_insert(conn: pog.Connection, evt: AuditEvent) -> Bool {
   let result =
     pog.query(
       "
-      INSERT INTO audit_events (id, actor, action, resource_type, resource_id, timestamp, correlation_id, entity_key, metadata)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+      INSERT INTO audit_events (id, actor, action, resource_type, resource_id, timestamp, event_type, correlation_id, entity_key, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
       ON CONFLICT (id) DO NOTHING
     ",
     )
@@ -165,6 +165,7 @@ fn pg_insert(conn: pog.Connection, evt: AuditEvent) -> Bool {
     |> pog.parameter(pog.text(evt.resource_type))
     |> pog.parameter(pog.text(evt.resource_id))
     |> pog.parameter(pog.timestamp(ts))
+    |> pog.parameter(pog.nullable(pog.text, evt.event_type))
     |> pog.parameter(pog.nullable(pog.text, evt.correlation_id))
     |> pog.parameter(pog.nullable(pog.text, evt.entity_key))
     |> pog.parameter(pog.text(metadata_json))
@@ -185,7 +186,7 @@ fn pg_list_all(conn: pog.Connection) -> List(AuditEvent) {
       "
       SELECT id, actor, action, resource_type, resource_id, 
              to_char(timestamp, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as timestamp,
-             correlation_id, entity_key, metadata::text
+             event_type, correlation_id, entity_key, metadata::text
       FROM audit_events
       ORDER BY timestamp DESC
     ",
@@ -208,7 +209,7 @@ fn pg_get(conn: pog.Connection, id: String) -> Result(AuditEvent, Nil) {
       "
       SELECT id, actor, action, resource_type, resource_id,
              to_char(timestamp, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as timestamp,
-             correlation_id, entity_key, metadata::text
+             event_type, correlation_id, entity_key, metadata::text
       FROM audit_events
       WHERE id = $1
     ",
@@ -242,9 +243,10 @@ fn event_row_decoder() -> decode.Decoder(AuditEvent) {
   use resource_type <- decode.field(3, decode.string)
   use resource_id <- decode.field(4, decode.string)
   use timestamp <- decode.field(5, decode.string)
-  use correlation_id <- decode.field(6, decode.optional(decode.string))
-  use entity_key <- decode.field(7, decode.optional(decode.string))
-  use metadata_json <- decode.field(8, decode.string)
+  use event_type <- decode.field(6, decode.optional(decode.string))
+  use correlation_id <- decode.field(7, decode.optional(decode.string))
+  use entity_key <- decode.field(8, decode.optional(decode.string))
+  use metadata_json <- decode.field(9, decode.string)
 
   let metadata = json_to_metadata(metadata_json)
 
@@ -255,6 +257,7 @@ fn event_row_decoder() -> decode.Decoder(AuditEvent) {
     resource_type: resource_type,
     resource_id: resource_id,
     timestamp: timestamp,
+    event_type: event_type,
     correlation_id: correlation_id,
     entity_key: entity_key,
     metadata: metadata,

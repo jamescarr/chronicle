@@ -505,6 +505,73 @@ nodes:
     @epmd -names 2>/dev/null || echo "epmd not running (no Erlang nodes active)"
 
 # =============================================================================
+# Routing Configuration
+# =============================================================================
+
+# Consumer role for datatype channel routing
+consumer_role := env("CHRONICLE_CONSUMER_ROLE", "default")
+
+# Start consumer with a specific role (from chronicle.toml)
+[group('routing')]
+consumer-role role="default":
+    ERL_FLAGS="-sname consumer_{{role}} -setcookie {{cookie}}" \
+    CHRONICLE_TRANSPORT=rabbitmq \
+    CHRONICLE_STORE={{store}} \
+    CHRONICLE_CONSUMER_ROLE={{role}} \
+    POSTGRES_HOST={{pg_host}} \
+    POSTGRES_PORT={{pg_port}} \
+    POSTGRES_USER={{pg_user}} \
+    POSTGRES_PASSWORD={{pg_pass}} \
+    POSTGRES_DATABASE={{pg_db}} \
+    gleam run
+
+# Show configured routes from chronicle.toml
+[group('routing')]
+show-routes:
+    @cat priv/chronicle.toml | grep -A5 '\[\[routes\]\]'
+
+# Show configured consumers from chronicle.toml
+[group('routing')]
+show-consumers:
+    @cat priv/chronicle.toml | grep -A5 '\[\[consumers\]\]'
+
+# Send a security event (for datatype channel testing)
+[group('routing')]
+send-security-event:
+    @echo "Sending security event..."
+    @curl -s -X POST http://localhost:8080/events \
+        -H "Content-Type: application/json" \
+        -d '{"actor":"test@example.com","action":"login","resource_type":"security","resource_id":"session-123","event_type":"security.login"}' | jq .
+
+# Send a user event (for datatype channel testing)
+[group('routing')]
+send-user-event:
+    @echo "Sending user event..."
+    @curl -s -X POST http://localhost:8080/events \
+        -H "Content-Type: application/json" \
+        -d '{"actor":"admin@example.com","action":"created","resource_type":"user","resource_id":"user-456","event_type":"user.created"}' | jq .
+
+# Send a billing event (for datatype channel testing)
+[group('routing')]
+send-billing-event:
+    @echo "Sending billing event..."
+    @curl -s -X POST http://localhost:8080/events \
+        -H "Content-Type: application/json" \
+        -d '{"actor":"billing@example.com","action":"charge","resource_type":"billing","resource_id":"inv-789","event_type":"billing.charge"}' | jq .
+
+# List all RabbitMQ queues
+[group('routing')]
+list-queues:
+    @echo "RabbitMQ queues:"
+    @curl -s -u guest:guest http://localhost:15672/api/queues | jq '.[] | {name: .name, messages: .messages, consumers: .consumers}'
+
+# List all RabbitMQ exchanges
+[group('routing')]
+list-exchanges:
+    @echo "RabbitMQ exchanges:"
+    @curl -s -u guest:guest http://localhost:15672/api/exchanges | jq '.[] | select(.name != "") | {name: .name, type: .type}'
+
+# =============================================================================
 # Info
 # =============================================================================
 

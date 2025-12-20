@@ -7,11 +7,16 @@
 //// - correlation_id: links related events for tracing
 //// - entity_key: references an entity for metadata enrichment
 //// - metadata: extensible key-value pairs added by filters
+////
+//// The event_type field enables Datatype Channel routing:
+//// - Format: "category.action" (e.g., "security.login", "user.created")
+//// - Used as RabbitMQ routing key for topic exchanges
 
 import gleam/dict.{type Dict}
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 
 /// An audit event capturing who did what to which resource
 pub type AuditEvent {
@@ -22,6 +27,8 @@ pub type AuditEvent {
     resource_type: String,
     resource_id: String,
     timestamp: String,
+    // Datatype Channel routing key
+    event_type: Option(String),
     // Enrichment fields
     correlation_id: Option(String),
     entity_key: Option(String),
@@ -30,6 +37,7 @@ pub type AuditEvent {
 }
 
 /// Create a new audit event with default enrichment fields
+/// The event_type is auto-derived from resource_type.action
 pub fn new(
   id: String,
   actor: String,
@@ -38,6 +46,7 @@ pub fn new(
   resource_id: String,
   timestamp: String,
 ) -> AuditEvent {
+  let event_type = derive_event_type(resource_type, action)
   AuditEvent(
     id:,
     actor:,
@@ -45,10 +54,17 @@ pub fn new(
     resource_type:,
     resource_id:,
     timestamp:,
+    event_type: Some(event_type),
     correlation_id: None,
     entity_key: None,
     metadata: dict.new(),
   )
+}
+
+/// Derive event_type from resource_type and action
+/// e.g., ("User", "Login") -> "user.login"
+fn derive_event_type(resource_type: String, action: String) -> String {
+  string.lowercase(resource_type) <> "." <> string.lowercase(action)
 }
 
 /// Create a new audit event with enrichment fields
@@ -62,6 +78,7 @@ pub fn new_with_enrichment(
   correlation_id: Option(String),
   entity_key: Option(String),
 ) -> AuditEvent {
+  let event_type = derive_event_type(resource_type, action)
   AuditEvent(
     id:,
     actor:,
@@ -69,10 +86,44 @@ pub fn new_with_enrichment(
     resource_type:,
     resource_id:,
     timestamp:,
+    event_type: Some(event_type),
     correlation_id:,
     entity_key:,
     metadata: dict.new(),
   )
+}
+
+/// Create an event with explicit event_type (for custom routing)
+pub fn new_with_type(
+  id: String,
+  actor: String,
+  action: String,
+  resource_type: String,
+  resource_id: String,
+  timestamp: String,
+  event_type: String,
+) -> AuditEvent {
+  AuditEvent(
+    id:,
+    actor:,
+    action:,
+    resource_type:,
+    resource_id:,
+    timestamp:,
+    event_type: Some(event_type),
+    correlation_id: None,
+    entity_key: None,
+    metadata: dict.new(),
+  )
+}
+
+/// Get the routing key for this event
+/// Returns the event_type or a default based on resource_type.action
+pub fn routing_key(event: AuditEvent) -> String {
+  case event.event_type {
+    Some(et) -> et
+    None -> derive_event_type(event.resource_type, event.action)
+  }
 }
 
 /// Add metadata to an event
@@ -93,6 +144,7 @@ pub fn to_json(evt: AuditEvent) -> Json {
   // Build optional fields list
   let optional_fields =
     []
+    |> add_optional_field("event_type", evt.event_type)
     |> add_optional_field("correlation_id", evt.correlation_id)
     |> add_optional_field("entity_key", evt.entity_key)
     |> add_metadata_field(evt.metadata)
