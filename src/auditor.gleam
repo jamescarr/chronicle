@@ -62,6 +62,7 @@ pub fn main() -> Nil {
 
   // Start consumers if this endpoint is configured as a consumer
   // The gateway handles all transport-specific details!
+  // Consumer role determines which queue to subscribe to (e.g., "security" → chronicle.security)
   let consumer_pool = case config.is_consumer(cfg) {
     False -> {
       log.info("Producer mode: not starting consumers")
@@ -69,10 +70,11 @@ pub fn main() -> Nil {
     }
     True -> {
       case
-        gateway.start_consumers(
+        gateway.start_consumers_with_role(
           gateway_result.gateway,
           cfg.consumer_count,
           store,
+          cfg.consumer_role,
         )
       {
         Ok(pool) -> {

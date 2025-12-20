@@ -297,14 +297,14 @@ fn json_to_event(payload: String) -> Result(AuditEvent, Nil) {
           et,
         ))
       None ->
-        decode.success(event.new(
-          id,
-          actor,
-          action,
-          resource_type,
-          resource_id,
-          timestamp,
-        ))
+    decode.success(event.new(
+      id,
+      actor,
+      action,
+      resource_type,
+      resource_id,
+      timestamp,
+    ))
     }
   }
   json.parse(payload, decoder)

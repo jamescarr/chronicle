@@ -62,7 +62,7 @@ fn handle_events(req: WispRequest, ctx: Context) -> WispResponse {
 }
 
 /// POST /events - create a new audit event
-/// Supports optional enrichment fields: entity_key, correlation_id
+/// Supports optional enrichment fields: entity_key, correlation_id, event_type
 fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
   use body <- wisp.require_string_body(req)
 
@@ -82,6 +82,11 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
       None,
       decode.string |> decode.map(Some),
     )
+    use event_type <- decode.optional_field(
+      "event_type",
+      None,
+      decode.string |> decode.map(Some),
+    )
     decode.success(#(
       actor,
       action,
@@ -89,17 +94,18 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
       resource_id,
       entity_key,
       correlation_id,
+      event_type,
     ))
   }
 
   case json.parse(body, decoder) {
-    Ok(#(actor, action, resource_type, resource_id, entity_key, correlation_id)) -> {
+    Ok(#(actor, action, resource_type, resource_id, entity_key, correlation_id, event_type)) -> {
       let id = uuid.v4_string()
       let timestamp = birl.utc_now() |> birl.to_iso8601
 
-      // Create event with optional enrichment fields
+      // Create event with optional enrichment fields (including event_type for routing)
       let raw_event =
-        event.new_with_enrichment(
+        event.new_with_all_options(
           id,
           actor,
           action,
@@ -108,6 +114,7 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
           timestamp,
           correlation_id,
           entity_key,
+          event_type,
         )
 
       // Process through the ingestion pipeline (validate/normalize, no enrichment)

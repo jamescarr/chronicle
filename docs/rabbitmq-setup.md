@@ -1,245 +1,289 @@
 # RabbitMQ Setup for Chronicle
 
-This guide explains how to run Chronicle with RabbitMQ as the message transport.
+This guide explains how to run Chronicle with RabbitMQ as the message transport, including Datatype Channels for routing events by type.
 
 ## Prerequisites
 
 - Docker and Docker Compose
 - Chronicle dependencies installed (`gleam deps download`)
+- just (recommended for convenience)
 
 ## Quick Start
 
-### 1. Start RabbitMQ
-
 ```bash
-docker-compose up -d
+# 1. Start all services (PostgreSQL + RabbitMQ)
+just setup
+
+# 2. Run with RabbitMQ transport
+just transport=rabbitmq run
 ```
 
-This starts RabbitMQ with the management plugin. You can access:
-- **AMQP**: `localhost:5672`
-- **Management UI**: [http://localhost:15672](http://localhost:15672)
-  - Username: `guest`
-  - Password: `guest`
+This starts:
+- **PostgreSQL**: `localhost:5432`
+- **RabbitMQ AMQP**: `localhost:5672`
+- **RabbitMQ Management UI**: [http://localhost:15672](http://localhost:15672) (guest/guest)
 
-### 2. Configure Chronicle for RabbitMQ
+## Configuration
 
-Copy the environment template and enable RabbitMQ:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` to set:
-
-```bash
-CHRONICLE_TRANSPORT=rabbitmq
-```
-
-### 3. Run Chronicle
-
-Load the environment and start:
-
-```bash
-export $(cat .env | xargs)
-gleam run
-```
-
-You should see output like:
-
-```
-INFO [<0.XX.0>] Starting Chronicle...
-INFO [<0.XX.0>] Transport: RabbitMQ
-INFO [<0.XX.0>] Connecting to RabbitMQ at localhost:5672
-INFO [<0.XX.0>] Connected to RabbitMQ
-INFO [<0.XX.0>] Channel opened
-INFO [<0.XX.0>] Queue declared: chronicle.events
-INFO [<0.XX.0>] Gateway started: RabbitMQ (chronicle.events)
-```
-
-## Configuration Options
+### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHRONICLE_TRANSPORT` | `otp` | Transport backend: `otp` or `rabbitmq` |
-| `RABBITMQ_HOST` | `localhost` | RabbitMQ server hostname |
+| `CHRONICLE_TRANSPORT` | `otp` | `otp` or `rabbitmq` |
+| `CHRONICLE_MODE` | `full` | `full`, `producer`, or `consumer` |
+| `CHRONICLE_CONSUMER_ROLE` | `default` | Consumer role from `chronicle.toml` |
+| `RABBITMQ_HOST` | `localhost` | RabbitMQ hostname |
 | `RABBITMQ_PORT` | `5672` | AMQP port |
 | `RABBITMQ_USER` | `guest` | Username |
 | `RABBITMQ_PASS` | `guest` | Password |
 | `RABBITMQ_VHOST` | `/` | Virtual host |
-| `RABBITMQ_QUEUE` | `chronicle.events` | Queue name |
 
-## Verifying the Setup
+### Routing Configuration
 
-### Send a Test Event
+Edit `priv/chronicle.toml` to customize routing:
+
+```toml
+[exchanges.audit_events]
+type = "topic"
+durable = true
+
+[[routes]]
+name = "security_events"
+exchange = "audit_events"
+queue = "chronicle.security"
+routing_key = "security.#"
+dead_letter_exchange = "dead_letter"
+dead_letter_queue = "chronicle.security.dlq"
+
+[[routes]]
+name = "user_events"
+exchange = "audit_events"
+queue = "chronicle.users"
+routing_key = "user.#"
+
+[[consumers]]
+name = "security"
+routes = ["security_events"]
+instances = 2
+
+[[consumers]]
+name = "analytics"
+routes = ["all_events"]
+instances = 1
+```
+
+## Architecture
+
+### Simple Mode (Single Queue)
+
+```
+┌─────────────────┐
+│   HTTP API      │
+│  POST /events   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  RabbitMQ       │
+│  chronicle.events
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Consumers     │
+│   (competing)   │
+└─────────────────┘
+```
+
+### Datatype Channel Mode (Topic Routing)
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        HTTP API                                   │
+│  POST /events { "event_type": "security.login", ... }            │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                  Topic Exchange (audit_events)                    │
+│                                                                   │
+│   Routing Key     │  Queue                                        │
+│   ─────────────────────────────────────────                       │
+│   security.#      │  chronicle.security                           │
+│   user.#          │  chronicle.users                              │
+│   billing.#       │  chronicle.billing                            │
+│   #               │  chronicle.all (catch-all)                    │
+└───────┬───────────────────┬───────────────────┬───────────────────┘
+        │                   │                   │
+        ▼                   ▼                   ▼
+┌───────────────┐   ┌───────────────┐   ┌───────────────┐
+│   Security    │   │    Users      │   │   Analytics   │
+│   Consumers   │   │   Consumers   │   │   Consumers   │
+│  (role-based) │   │  (role-based) │   │  (all events) │
+└───────────────┘   └───────────────┘   └───────────────┘
+```
+
+## Running Separate Producers and Consumers
+
+### Production Pattern
+
+In production, run producers and consumers as separate processes:
+
+**Terminal 1: Producer (HTTP API)**
+```bash
+just transport=rabbitmq producer
+```
+
+**Terminal 2: Security Consumers**
+```bash
+just transport=rabbitmq role=security consumers 2
+```
+
+**Terminal 3: Analytics Consumer**
+```bash
+just transport=rabbitmq role=analytics consumers 1
+```
+
+### Testing Routing
 
 ```bash
-just ingest
+# Send different event types
+just send-security-event    # Routes to security + analytics
+just send-user-event        # Routes to users + analytics
+just send-billing-event     # Routes to billing + analytics
+
+# Check queue status
+just list-queues
 ```
 
-### View the Queue in Management UI
-
-1. Open [http://localhost:15672](http://localhost:15672)
-2. Go to **Queues** tab
-3. Find `chronicle.events`
-4. You can see:
-   - Message count
-   - Consumer count
-   - Message rates
-
-### List Events
+### Example Output
 
 ```bash
-just list-events
+$ just list-queues
+RabbitMQ queues:
+{
+  "name": "chronicle.security",
+  "messages": 0,
+  "consumers": 2
+}
+{
+  "name": "chronicle.users",
+  "messages": 0,
+  "consumers": 0
+}
+{
+  "name": "chronicle.all",
+  "messages": 0,
+  "consumers": 1
+}
 ```
 
-## Architecture with RabbitMQ
+## Scaling Consumers
 
-```
-                    ┌─────────────────────────────────────┐
-                    │           HTTP API                  │
-                    │         POST /events                │
-                    └───────────────┬─────────────────────┘
-                                    │
-                                    ▼
-                    ┌─────────────────────────────────────┐
-                    │       Messaging Gateway             │
-                    │     (gateway.gleam)                 │
-                    │                                     │
-                    │  Abstracts OTP vs RabbitMQ          │
-                    └───────────────┬─────────────────────┘
-                                    │
-                                    ▼
-                    ┌─────────────────────────────────────┐
-                    │       RabbitMQ Backend              │
-                    │      (rabbit.gleam)                 │
-                    │                                     │
-                    │  • Durable queue                    │
-                    │  • Persistent delivery              │
-                    │  • JSON serialization               │
-                    └───────────────┬─────────────────────┘
-                                    │ AMQP
-                                    ▼
-                    ┌─────────────────────────────────────┐
-                    │         RabbitMQ Server             │
-                    │     chronicle.events queue          │
-                    │                                     │
-                    │  ┌────────────────────────────┐     │
-                    │  │  [E1] [E2] [E3] [E4] ...   │     │
-                    │  └────────────────────────────┘     │
-                    └─────────────────────────────────────┘
+Scale specific consumer roles independently:
+
+```bash
+# Scale security team during incident
+just transport=rabbitmq role=security consumers 5
+
+# Scale analytics for batch processing
+just transport=rabbitmq role=analytics consumers 3
 ```
 
-## Benefits of RabbitMQ Mode
+Each consumer instance gets unique messages from its subscribed queues (competing consumers pattern).
 
-1. **Durability**: Messages survive broker restarts
-2. **Distribution**: Producers and consumers can run on different machines
-3. **Scalability**: Add more consumers without code changes
-4. **Monitoring**: Built-in management UI for visibility
-5. **Decoupling**: True asynchronous messaging between services
+## Dead Letter Queues
+
+Failed messages automatically route to dead letter queues:
+
+```
+chronicle.security → (on failure) → chronicle.security.dlq
+chronicle.users    → (on failure) → chronicle.users.dlq
+chronicle.billing  → (on failure) → chronicle.billing.dlq
+```
+
+Check DLQ status:
+```bash
+curl -s -u guest:guest http://localhost:15672/api/queues/%2F | \
+  jq '.[] | select(.name | endswith(".dlq")) | {name, messages}'
+```
+
+## Monitoring
+
+### Management UI
+
+Open [http://localhost:15672](http://localhost:15672) to see:
+- Queue depths and rates
+- Consumer connections
+- Exchange bindings
+- Message publishing rates
+
+### Just Commands
+
+```bash
+just rabbit-status      # Queue status with consumer count
+just list-queues        # All queues with message counts
+just list-exchanges     # All exchanges
+just rabbit-consumers   # Consumer details
+```
 
 ## Comparison: OTP vs RabbitMQ
 
 | Feature | OTP Mode | RabbitMQ Mode |
 |---------|----------|---------------|
-| Setup | None | Requires RabbitMQ server |
-| Distribution | Single process | Multiple machines |
-| Durability | In-memory only | Persistent to disk |
-| Performance | Very fast | Network overhead |
-| Use case | Development, single node | Production, distributed |
-
-## Running Producer and Consumer Separately
-
-In production deployments, you typically run producers and consumers as separate processes. This enables:
-
-- **Independent scaling**: Scale consumers based on queue depth
-- **Fault isolation**: Consumer crashes don't affect the HTTP API
-- **Deployment flexibility**: Update consumers without downtime
-
-### Terminal 1: Start RabbitMQ
-
-```bash
-just rabbit-up
-```
-
-### Terminal 2: Start the Producer
-
-```bash
-just run-rabbit-producer
-```
-
-This starts the HTTP API that publishes events to RabbitMQ.
-
-### Terminal 3: Start the Consumer
-
-```bash
-just run-rabbit-consumer
-```
-
-This subscribes to the queue and processes events.
-
-### Testing the Setup
-
-```bash
-# Send events via the producer
-just ingest
-just ingest
-just ingest
-
-# Check the RabbitMQ management UI to see messages being processed
-# http://localhost:15672 -> Queues -> chronicle.events
-```
-
-### Running Multiple Consumers
-
-You can run multiple consumer instances for parallel processing:
-
-```bash
-# Terminal 3
-CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=consumer CHRONICLE_PORT=8081 gleam run
-
-# Terminal 4
-CHRONICLE_TRANSPORT=rabbitmq CHRONICLE_MODE=consumer CHRONICLE_PORT=8082 gleam run
-```
-
-Each consumer will receive different messages from the queue (competing consumers pattern).
+| Setup | None | Requires RabbitMQ |
+| Distribution | Single process | Multi-machine |
+| Durability | In-memory | Persistent |
+| Routing | Single channel | Topic exchange |
+| Dead letters | None | Automatic DLQ |
+| Scaling | Limited | Horizontal |
+| Use case | Development | Production |
 
 ## Troubleshooting
 
 ### Connection Refused
 
-If you see "Connection refused", ensure RabbitMQ is running:
-
 ```bash
+# Check if RabbitMQ is running
 docker-compose ps
-# Should show "Up" status
 
+# Check logs
 docker-compose logs rabbitmq
-# Check for startup errors
 ```
 
-### Queue Not Created
+### Messages Not Routing
 
-The queue is created automatically when Chronicle starts. If it's missing:
+1. Check the event has an `event_type` field
+2. Verify routing key matches patterns in `chronicle.toml`
+3. Ensure queues are bound to the exchange:
+   ```bash
+   just list-exchanges
+   ```
 
-1. Check Chronicle logs for errors
-2. Ensure the RabbitMQ user has permissions
-3. Try restarting Chronicle
+### Consumers Not Receiving
 
-### Messages Not Being Consumed
+1. Verify consumers are subscribed:
+   ```bash
+   just rabbit-consumers
+   ```
+2. Check the consumer role matches routes in `chronicle.toml`
+3. Ensure `CHRONICLE_MODE=consumer` is set
 
-In RabbitMQ mode, you need to run a separate consumer process. See the section on running producers and consumers independently.
+### DLQ Messages Piling Up
+
+Inspect failed messages:
+```bash
+# View DLQ contents
+docker-compose exec rabbitmq rabbitmqctl list_queues name messages | grep dlq
+```
 
 ## Cleanup
 
-Stop and remove RabbitMQ:
-
 ```bash
-docker-compose down
-```
+# Stop services
+just services-down
 
-Remove all data:
-
-```bash
+# Remove all data (fresh start)
 docker-compose down -v
+just setup
 ```
-

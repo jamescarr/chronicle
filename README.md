@@ -1,250 +1,178 @@
 # Chronicle - Audit Logging System
 
-A demonstration of Enterprise Integration Patterns implemented in Gleam, showcasing **Point-to-Point Channel** with **Competing Consumers**, wrapped in a **Messaging Gateway** for transport abstraction.
+A demonstration of Enterprise Integration Patterns implemented in Gleam, featuring **Message Channels**, **Competing Consumers**, **Datatype Channels**, and **Dead Letter Queues** — all wrapped in a **Messaging Gateway** for transport abstraction.
 
-## Architecture
+## Quick Start
+
+```bash
+# Prerequisites: Gleam 1.0+, Docker, just
+
+# 1. Start infrastructure (PostgreSQL + RabbitMQ)
+just setup
+
+# 2. Run the full application (producer + consumers)
+just run
+
+# 3. Send test events
+just post                    # Send a basic event
+just ingest                  # Send a random event
+just flood 10                # Send 10 events in parallel
+```
+
+The server runs at `http://localhost:8080`.
+
+## Architecture Overview
 
 ```
-                    ┌─────────────────────────────────┐
-                    │         HTTP Requests           │
-                    │       POST /events (JSON)       │
-                    └───────────────┬─────────────────┘
-                                    │
-                                    ▼
-                    ┌─────────────────────────────────┐
-                    │           API Layer             │
-                    │         (router.gleam)          │
-                    │                                 │
-                    │  • Parse JSON                   │
-                    │  • Generate ID & timestamp      │
-                    │  • Send to channel              │
-                    └───────────────┬─────────────────┘
-                                    │
-                                    ▼ channel.send(event)
-                    ┌─────────────────────────────────┐
-                    │     Point-to-Point Channel      │
-                    │        (channel.gleam)          │
-                    │                                 │
-                    │  OTP Actor acting as a queue:   │
-                    │  • FIFO ordering                │
-                    │  • Each message → ONE consumer  │
-                    │                                 │
-                    │  [E1] → [E2] → [E3] → [E4]      │
-                    └───────────────┬─────────────────┘
-                                    │
-                 ┌──────────────────┼──────────────────┐
-                 │                  │                  │
-                 ▼                  ▼                  ▼
-        ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-        │ Consumer 1  │    │ Consumer 2  │    │ Consumer 3  │
-        │  <0.123.0>  │    │  <0.124.0>  │    │  <0.125.0>  │
-        └──────┬──────┘    └──────┬──────┘    └──────┬──────┘
-               │                  │                  │
-               │    Competing Consumers Pattern      │
-               │    Each races to grab messages      │
-               │                  │                  │
-               └──────────────────┼──────────────────┘
-                                  │
-                                  ▼ store.insert(event)
-                    ┌─────────────────────────────────┐
-                    │           ETS Store             │
-                    │         (store.gleam)           │
-                    │                                 │
-                    │  In-memory Erlang Term Storage  │
-                    │  • Concurrent read/write safe   │
-                    │  • Keyed by event ID            │
-                    └─────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              HTTP API (Producer)                             │
+│                            POST /events (JSON)                               │
+└────────────────────────────────────┬────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Topic Exchange (audit_events)                        │
+│                                                                              │
+│   Routes messages by event_type:                                             │
+│     security.* → chronicle.security                                          │
+│     user.*     → chronicle.users                                             │
+│     billing.*  → chronicle.billing                                           │
+│     #          → chronicle.all (catch-all)                                   │
+└───────┬───────────────────┬───────────────────┬───────────────────┬─────────┘
+        │                   │                   │                   │
+        ▼                   ▼                   ▼                   ▼
+┌───────────────┐   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
+│   Security    │   │    Users      │   │   Billing     │   │   Analytics   │
+│   Consumers   │   │   Consumers   │   │   Consumers   │   │   Consumers   │
+└───────┬───────┘   └───────┬───────┘   └───────┬───────┘   └───────┬───────┘
+        │                   │                   │                   │
+        └───────────────────┴───────────────────┴───────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         PostgreSQL (Shared Database)                         │
+│                            audit_events table                                │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Enterprise Integration Patterns
 
 Chronicle demonstrates several patterns from *Enterprise Integration Patterns* by Hohpe & Woolf:
 
-### Messaging Gateway
+| Pattern | Implementation |
+|---------|----------------|
+| **Messaging Gateway** | `gateway.gleam` - abstracts OTP vs RabbitMQ |
+| **Point-to-Point Channel** | Each queue delivers to exactly one consumer |
+| **Competing Consumers** | Multiple consumers race for messages |
+| **Datatype Channel** | Topic exchange routes by `event_type` |
+| **Invalid Message Channel** | Dead letter queues for failed messages |
+| **Pipes and Filters** | Event enrichment pipeline |
 
-> A Messaging Gateway wraps messaging-specific method calls and exposes domain-specific methods to the application.
+## Configuration
 
-- The **Gateway** (`gateway.gleam`) abstracts the messaging transport
-- Application code calls `gateway.send_event()` without knowing the backend
-- Supports **OTP** (in-process) or **RabbitMQ** (distributed) transports
-- Configuration-driven via environment variables (12-factor app)
+Chronicle follows [12-factor app](https://12factor.net/config) principles. All configuration via environment variables:
 
-### Point-to-Point Channel
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHRONICLE_TRANSPORT` | `otp` | `otp` or `rabbitmq` |
+| `CHRONICLE_MODE` | `full` | `full`, `producer`, or `consumer` |
+| `CHRONICLE_STORE` | `postgres` | `postgres` or `ets` |
+| `CHRONICLE_CONSUMER_ROLE` | `default` | Consumer role from `chronicle.toml` |
+| `CHRONICLE_CONSUMER_COUNT` | `3` | Number of consumers per instance |
+| `CHRONICLE_PORT` | `8080` | HTTP server port |
 
-> A Point-to-Point Channel ensures that only one receiver consumes any given message.
+### Routing Configuration
 
-- The **Channel** actor is our Point-to-Point Channel
-- Messages (audit events) are queued in FIFO order
-- Each message is delivered to exactly **one** consumer
-- This guarantees no duplicate processing
+Message routing is defined in `priv/chronicle.toml`:
 
-### Competing Consumers
+```toml
+[exchanges.audit_events]
+type = "topic"
+durable = true
 
-> Multiple consumers compete to receive messages from a single channel, enabling parallel processing.
+[[routes]]
+name = "security_events"
+exchange = "audit_events"
+queue = "chronicle.security"
+routing_key = "security.#"
+dead_letter_exchange = "dead_letter"
+dead_letter_queue = "chronicle.security.dlq"
 
-- **3 consumer actors** poll the same channel
-- They **race** to grab each message
-- Load is **distributed** across consumers
-- All write to the **same store** (ETS handles concurrency)
+[[routes]]
+name = "all_events"
+exchange = "audit_events"
+queue = "chronicle.all"
+routing_key = "#"  # Catch-all
 
-## Transport Modes
+[[consumers]]
+name = "security"
+routes = ["security_events"]
+instances = 2
 
-Chronicle supports two messaging transports:
+[[consumers]]
+name = "analytics"
+routes = ["all_events"]
+instances = 1
+```
 
-| Mode | Environment | Use Case |
-|------|-------------|----------|
-| **OTP** (default) | `CHRONICLE_TRANSPORT=otp` | Development, single node |
-| **RabbitMQ** | `CHRONICLE_TRANSPORT=rabbitmq` | Production, distributed |
+## Running Modes
 
-### OTP Mode (Default)
-
-Uses Gleam/OTP actors for in-process messaging. No external dependencies.
+### Full Mode (Default)
+Runs both producer (HTTP API) and consumers:
 
 ```bash
-gleam run  # Uses OTP by default
-```
-
-### RabbitMQ Mode
-
-Uses RabbitMQ via carotte for distributed messaging.
-
-```bash
-# Start RabbitMQ
-just rabbit-up
-
-# Run with RabbitMQ
-just run-rabbit
-# or: CHRONICLE_TRANSPORT=rabbitmq gleam run
-```
-
-See [docs/rabbitmq-setup.md](docs/rabbitmq-setup.md) for detailed setup instructions.
-
-## Process-per-Request Model
-
-Chronicle runs on the BEAM (Erlang VM), which spawns a **new lightweight process for each HTTP request**. This is visible in the logs:
-
-```
-INFO [<0.82.0>] Starting Chronicle...
-INFO [<0.82.0>] Starting consumer: consumer-1
-INFO [<0.82.0>] Starting consumer: consumer-2
-INFO [<0.82.0>] Starting consumer: consumer-3
-INFO [<0.82.0>] Started 3 competing consumers
-
-INFO [<0.141.0>] Queued event abc-123...
-INFO [<0.123.0>] [consumer-1] Processing abc-123 - create
-INFO [<0.142.0>] Queued event def-456...
-INFO [<0.124.0>] [consumer-2] Processing def-456 - update   ← different consumer!
-INFO [<0.143.0>] Queued event ghi-789...
-INFO [<0.125.0>] [consumer-3] Processing ghi-789 - delete   ← load distributed!
-```
-
-Each PID (e.g., `<0.123.0>`) identifies a unique process:
-
-| Process | Role | Lifecycle |
-|---------|------|-----------|
-| `<0.82.0>` | Main application | Persistent |
-| `<0.123.0>` | Consumer 1 | Persistent |
-| `<0.124.0>` | Consumer 2 | Persistent |
-| `<0.125.0>` | Consumer 3 | Persistent |
-| `<0.141.0>`, `<0.142.0>`, ... | HTTP request handlers | Per-request |
-
-This architecture provides:
-- **Isolation** - if one request crashes, others are unaffected
-- **Concurrency** - thousands of requests handled simultaneously
-- **Fault tolerance** - embraces the "let it crash" philosophy
-- **Scalability** - add more consumers to increase throughput
-
-## Quick Start
-
-### Prerequisites
-
-- [Gleam](https://gleam.run/getting-started/installing/) 1.0+
-- [Erlang/OTP](https://www.erlang.org/downloads) 26+
-- [just](https://github.com/casey/just) (optional, for convenience commands)
-
-### Running
-
-```bash
-# Using just (recommended)
-just deps      # Install dependencies
-just build     # Build the project
-just run       # Start the server
-
-# Or manually
-gleam deps download
-gleam build
-gleam run
-```
-
-The server starts at `http://localhost:8080`.
-
-## Testing
-
-### Using just commands
-
-```bash
-# Start the server in one terminal
 just run
-
-# In another terminal:
-just health        # Check server health
-just ingest        # Send a random audit event
-just ingest        # Send another (different random data each time)
-just list-events   # View all stored events
 ```
 
-### Manual testing with curl
+### Producer Only
+Just the HTTP API, no consumers:
 
 ```bash
-# Health check
-curl http://localhost:8080/health
+just producer
+```
 
-# Create an audit event
+### Consumer Only
+Process messages without HTTP server:
+
+```bash
+just consumer                           # Single consumer
+just consumers 3                        # 3 consumers
+just role=security consumers 2          # 2 security consumers
+just transport=rabbitmq role=analytics consumers 1
+```
+
+### Composable Commands
+
+Variables can be combined freely:
+
+```bash
+# Local development with ETS
+just store=ets run
+
+# RabbitMQ with specific role
+just transport=rabbitmq role=security consumers 3
+
+# Producer with RabbitMQ, consumers handle security events
+# Terminal 1:
+just transport=rabbitmq producer
+
+# Terminal 2:
+just transport=rabbitmq role=security consumers 2
+```
+
+## API Reference
+
+### Create Event
+
+```bash
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
   -d '{
     "actor": "alice@example.com",
-    "action": "create",
-    "resource_type": "document",
-    "resource_id": "doc-123"
+    "action": "login",
+    "resource_type": "security",
+    "resource_id": "session-123"
   }'
-
-# List all events
-curl http://localhost:8080/events
-```
-
-### Running automated tests
-
-```bash
-just test
-# or
-gleam test
-```
-
-This runs the end-to-end test suite which:
-1. Starts a test server on port 9999
-2. Creates events via the API
-3. Verifies they appear in the list endpoint
-4. Tests error handling for invalid JSON
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/events` | Create audit event |
-| `GET` | `/events` | List all events |
-
-### POST /events
-
-**Request:**
-```json
-{
-  "actor": "user@example.com",
-  "action": "create",
-  "resource_type": "document",
-  "resource_id": "doc-123"
-}
 ```
 
 **Response (202 Accepted):**
@@ -255,80 +183,203 @@ This runs the end-to-end test suite which:
 }
 ```
 
-### GET /events
+### Create Event with Explicit Type
 
-**Response (200 OK):**
-```json
-[
-  {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "actor": "user@example.com",
-    "action": "create",
-    "resource_type": "document",
-    "resource_id": "doc-123",
-    "timestamp": "2025-12-16T07:05:05.452Z"
-  }
-]
+```bash
+curl -X POST http://localhost:8080/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor": "alice@example.com",
+    "action": "login",
+    "resource_type": "auth",
+    "resource_id": "session-123",
+    "event_type": "security.login"
+  }'
+```
+
+### List Events
+
+```bash
+curl http://localhost:8080/events | jq
+```
+
+### Health Check
+
+```bash
+curl http://localhost:8080/health
+```
+
+### Register Entity (for Enrichment)
+
+```bash
+curl -X POST http://localhost:8080/entities \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "org:acme",
+    "name": "Acme Corp",
+    "metadata": {"tier": "enterprise", "region": "us-west"}
+  }'
+```
+
+## Testing
+
+### Automated Tests
+
+```bash
+just test
+```
+
+### Manual Testing
+
+```bash
+# Basic event
+just post
+
+# Random event (different data each time)
+just ingest
+
+# Flood test (parallel events)
+just flood 20
+
+# Slow flood (see round-robin distribution)
+just flood-slow 10
+```
+
+### Testing Datatype Channels
+
+```bash
+# Start RabbitMQ consumers for different roles
+# Terminal 1: Security events only
+just transport=rabbitmq role=security consumers 2
+
+# Terminal 2: All events (analytics)
+just transport=rabbitmq role=analytics consumers 1
+
+# Terminal 3: Producer
+just transport=rabbitmq producer
+
+# Terminal 4: Send typed events
+just send-security-event    # Goes to security + analytics
+just send-user-event        # Goes to analytics only
+just send-billing-event     # Goes to analytics only
+```
+
+### Inspect RabbitMQ
+
+```bash
+just list-queues            # Show all queues with message counts
+just list-exchanges         # Show all exchanges
+just rabbit-status          # Detailed queue status
+```
+
+## Just Commands Reference
+
+```bash
+just                        # Show all commands
+just info                   # Show current configuration
+
+# Build & Test
+just build                  # Build the project
+just test                   # Run tests
+just check                  # Format + build + test
+
+# Run
+just run                    # Full mode (producer + consumer)
+just producer               # Producer only
+just consumer               # Single consumer
+just consumers 3            # Multiple consumers
+
+# Composable variables
+just transport=rabbitmq run
+just role=security consumers 2
+just store=ets run
+
+# Infrastructure
+just setup                  # Start services + run migrations
+just services-up            # Start PostgreSQL + RabbitMQ
+just services-down          # Stop services
+
+# Database
+just migrate                # Run all migrations
+just migrate-status         # Show migration status
+just pg-shell               # PostgreSQL CLI
+just pg-events              # Show recent events
+just pg-count               # Count events
+
+# RabbitMQ
+just rabbit-up              # Start RabbitMQ
+just rabbit-status          # Queue status
+just list-queues            # All queues
+just list-exchanges         # All exchanges
+
+# API Testing
+just health                 # Health check
+just post                   # Create event
+just events                 # List events
+just ingest                 # Random event
+just flood 20               # Parallel events
+
+# Datatype Channel Testing
+just send-security-event    # security.login event
+just send-user-event        # user.created event
+just send-billing-event     # billing.charge event
+just show-routes            # Show configured routes
+just show-consumers         # Show consumer roles
+
+# Debug
+just nodes                  # List Erlang nodes
+just kill                   # Stop all Chronicle processes
 ```
 
 ## Project Structure
 
 ```
-src/
-├── auditor.gleam           # Main entry point, starts all processes
-├── auditor/
-│   ├── event.gleam         # Audit event type (the "Message")
-│   ├── channel.gleam       # Point-to-Point Channel (OTP Actor)
-│   ├── consumer.gleam      # Consumer (OTP Actor)
-│   ├── store.gleam         # ETS storage interface
-│   ├── router.gleam        # HTTP router (Wisp)
-│   └── log.gleam           # Logging with process IDs
-└── auditor_store_ffi.erl   # Erlang FFI for ETS operations
-```
-
-## Available just commands
-
-```bash
-just                    # Show all available commands
-just bootstrap          # Clean, install deps, build
-just build              # Build the project
-just check              # Format, build, and test
-just clean              # Remove build artifacts
-just deps               # Install dependencies
-just dev                # Install, build, and run
-just fmt                # Format code
-just health             # Check server health
-just ingest             # Send a random event to the server
-just flood 20           # Send 20 events in parallel (test competing consumers)
-just list-events        # List all events from the server
-just run                # Start the server (full mode)
-just run-producer       # Start producer only (HTTP API)
-just run-consumer       # Start consumer only (processes events)
-just test               # Run tests
-just watch              # Run with auto-reload (requires watchexec)
-
-# RabbitMQ commands
-just rabbit-up          # Start RabbitMQ via Docker
-just rabbit-down        # Stop RabbitMQ
-just rabbit-status      # Show RabbitMQ and queue status
-just run-rabbit         # Run with RabbitMQ (full mode)
-just run-rabbit-producer # Producer with RabbitMQ
-just run-rabbit-consumer # Consumer with RabbitMQ
+chronicle/
+├── src/
+│   ├── auditor.gleam              # Main entry point
+│   └── auditor/
+│       ├── config.gleam           # Environment configuration
+│       ├── event.gleam            # Audit event type
+│       ├── event_store.gleam      # Storage abstraction (ETS/PostgreSQL)
+│       ├── gateway.gleam          # Messaging Gateway pattern
+│       ├── channel.gleam          # OTP Point-to-Point Channel
+│       ├── rabbit.gleam           # RabbitMQ backend
+│       ├── routing_config.gleam   # TOML configuration parser
+│       ├── topology.gleam         # RabbitMQ topology setup
+│       ├── invalid_message.gleam  # Dead letter queue handling
+│       ├── consumer.gleam         # Message processing logic
+│       ├── filters.gleam          # Pipes and Filters
+│       ├── entity_store.gleam     # Entity registry for enrichment
+│       ├── router.gleam           # HTTP router (Wisp)
+│       └── log.gleam              # Logging utilities
+├── priv/
+│   ├── chronicle.toml             # Routing configuration
+│   └── migrations/                # Database migrations
+├── test/                          # Test files
+├── docs/                          # Additional documentation
+├── docker-compose.yml             # PostgreSQL + RabbitMQ
+├── gleam.toml                     # Dependencies
+└── justfile                       # Task runner
 ```
 
 ## Dependencies
 
-- **gleam_stdlib** - Standard library
-- **gleam_erlang** - Erlang interop
-- **gleam_otp** - OTP actor support
-- **gleam_http** - HTTP types
-- **gleam_json** - JSON encoding/decoding
-- **wisp** - Web framework
-- **mist** - HTTP server
-- **youid** - UUID generation
-- **birl** - Date/time handling
-- **logging** - Structured logging
+| Package | Purpose |
+|---------|---------|
+| `gleam_otp` | Actor-based concurrency |
+| `carotte` | RabbitMQ client |
+| `pog` | PostgreSQL client |
+| `wisp` | Web framework |
+| `mist` | HTTP server |
+| `tom` | TOML configuration parsing |
+| `cigogne` | Database migrations |
+| `birl` | Date/time handling |
+| `youid` | UUID generation |
 
 ## Part of Advent of Enterprise Integration Patterns
 
-This is Day 1 of the [Advent of Enterprise Integration Patterns](https://jamescarr.github.io) series, exploring messaging patterns while building Chronicle, a production-ready audit logging system in Gleam.
+This project is part of the [Advent of Enterprise Integration Patterns](https://jamescarr.github.io) series, exploring messaging patterns while building Chronicle in Gleam.
+
+- [Day 1: Point-to-Point Channel & Competing Consumers](/posts/2025-12-15-advent-of-eip-day-1/)
+- [Day 2: Messaging Gateway & Pipes and Filters](/posts/2025-12-17-advent-of-eip-day-2/)
+- [Day 3: Message Channels (Datatype, Pub/Sub, DLQ)](/posts/2025-12-20-advent-of-eip-day-3/)

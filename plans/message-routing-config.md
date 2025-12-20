@@ -1,5 +1,14 @@
 # Message Routing Configuration Plan
 
+> ✅ **COMPLETED** - Implemented on 2025-12-20
+>
+> See the following files:
+> - `priv/chronicle.toml` - Configuration file
+> - `src/auditor/routing_config.gleam` - TOML parser
+> - `src/auditor/topology.gleam` - RabbitMQ topology setup
+> - `src/auditor/invalid_message.gleam` - DLQ handling
+> - `src/auditor/event.gleam` - Added `event_type` field
+
 ## Overview
 
 Implement configuration-file-based message routing for Chronicle, enabling:

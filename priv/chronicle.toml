@@ -31,6 +31,14 @@ description = "Dead letter exchange for failed messages"
 # ============================================================================
 # Routes define how events flow from exchanges to queues based on routing keys.
 # Routing keys are derived from event_type (e.g., "security.login", "user.created")
+# NOTE: The first route determines the default queue for consumers.
+
+[[routes]]
+name = "all_events"
+description = "Catch-all route for analytics and archival (default)"
+exchange = "audit_events"
+queue = "chronicle.all"
+routing_key = "#"
 
 [[routes]]
 name = "security_events"
@@ -58,13 +66,6 @@ queue = "chronicle.billing"
 routing_key = "billing.#"
 dead_letter_exchange = "dead_letter"
 dead_letter_queue = "chronicle.billing.dlq"
-
-[[routes]]
-name = "all_events"
-description = "Catch-all route for analytics and archival"
-exchange = "audit_events"
-queue = "chronicle.all"
-routing_key = "#"
 
 # ============================================================================
 # Consumers
@@ -99,6 +100,6 @@ instances = 1
 [[consumers]]
 name = "default"
 description = "Default consumer - handles all event types"
-routes = ["security_events", "user_events", "billing_events"]
+routes = ["all_events"]
 instances = 3
 

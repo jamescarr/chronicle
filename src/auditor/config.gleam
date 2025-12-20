@@ -85,6 +85,7 @@ pub type Config {
     store: StoreBackend,
     port: Int,
     consumer_count: Int,
+    consumer_role: String,
     rabbitmq: RabbitConfig,
     postgres: PostgresConfig,
   )
@@ -99,6 +100,7 @@ pub fn load() -> Config {
     store: load_store(),
     port: load_port(),
     consumer_count: load_consumer_count(),
+    consumer_role: load_consumer_role(),
     rabbitmq: load_rabbitmq_config(),
     postgres: load_postgres_config(),
   )
@@ -147,6 +149,13 @@ fn load_consumer_count() -> Int {
   envoy.get("CHRONICLE_CONSUMER_COUNT")
   |> result.try(int.parse)
   |> result.unwrap(3)
+}
+
+/// Load consumer role from CHRONICLE_CONSUMER_ROLE
+/// Defaults to "default" which typically handles all event types
+fn load_consumer_role() -> String {
+  envoy.get("CHRONICLE_CONSUMER_ROLE")
+  |> result.unwrap("default")
 }
 
 /// Load RabbitMQ configuration from environment

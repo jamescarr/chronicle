@@ -1,11 +1,23 @@
 # Chronicle - Audit Logging System
 # Run `just` to see available commands
+#
+# Composable variables - combine them freely:
+#   just transport=rabbitmq run
+#   just transport=rabbitmq role=security consumers 3
+#   just store=ets run
 
 # Transport adapter: "otp" (default) or "rabbitmq"
 transport := env("CHRONICLE_TRANSPORT", "otp")
 
 # Store backend: "postgres" (default) or "ets"
 store := env("CHRONICLE_STORE", "postgres")
+
+# Consumer role: "default" (all events) or specific roles from chronicle.toml
+# e.g., "security", "analytics", "billing", "users"
+role := env("CHRONICLE_CONSUMER_ROLE", "default")
+
+# Event type for sending test events: "security", "user", "billing"
+event := "security"
 
 # PostgreSQL connection defaults
 pg_host := env("POSTGRES_HOST", "localhost")
@@ -84,40 +96,49 @@ producer:
     POSTGRES_DATABASE={{pg_db}} \
     CHRONICLE_MODE=producer gleam run
 
+# Single consumer: just consumer (or just role=security consumer)
 [group('run')]
 consumer:
-    ERL_FLAGS="-sname consumer1 -setcookie {{cookie}}" \
+    ERL_FLAGS="-sname consumer_{{role}}_1 -setcookie {{cookie}}" \
     CHRONICLE_TRANSPORT={{transport}} \
     CHRONICLE_STORE={{store}} \
+    CHRONICLE_MODE=consumer \
+    CHRONICLE_CONSUMER_ROLE={{role}} \
     POSTGRES_HOST={{pg_host}} \
     POSTGRES_PORT={{pg_port}} \
     POSTGRES_USER={{pg_user}} \
     POSTGRES_PASSWORD={{pg_pass}} \
     POSTGRES_DATABASE={{pg_db}} \
-    CHRONICLE_MODE=consumer gleam run
+    gleam run
 
-# Start multiple consumers: `just consumers 3` or `just transport=rabbitmq consumers 5`
+# Multiple consumers with the same role:
+#   just consumers 3
+#   just transport=rabbitmq consumers 5
+#   just transport=rabbitmq role=security consumers 2
+#   just role=analytics consumers 1
 [group('run')]
 consumers count="3":
     #!/usr/bin/env bash
     COUNT={{count}}
-    echo "Starting $COUNT consumers..."
+    ROLE="{{role}}"
+    echo "Starting $COUNT consumers (role: $ROLE, transport: {{transport}})..."
     for i in $(seq 1 $COUNT); do
-        echo "Starting consumer$i..."
-        ERL_FLAGS="-sname consumer$i -setcookie {{cookie}}" \
+        echo "Starting consumer_${ROLE}_$i..."
+        ERL_FLAGS="-sname consumer_${ROLE}_$i -setcookie {{cookie}}" \
         CHRONICLE_TRANSPORT={{transport}} \
         CHRONICLE_STORE={{store}} \
+        CHRONICLE_MODE=consumer \
+        CHRONICLE_CONSUMER_ROLE={{role}} \
         POSTGRES_HOST={{pg_host}} \
         POSTGRES_PORT={{pg_port}} \
         POSTGRES_USER={{pg_user}} \
         POSTGRES_PASSWORD={{pg_pass}} \
         POSTGRES_DATABASE={{pg_db}} \
-        CHRONICLE_MODE=consumer \
         gleam run &
         sleep 0.5  # Give each node time to register
     done
     echo ""
-    echo "Started $COUNT consumers: consumer1 through consumer$COUNT"
+    echo "Started $COUNT $ROLE consumers"
     echo "Use 'just nodes' to verify, 'just kill' to stop all"
     wait
 
@@ -508,23 +529,6 @@ nodes:
 # Routing Configuration
 # =============================================================================
 
-# Consumer role for datatype channel routing
-consumer_role := env("CHRONICLE_CONSUMER_ROLE", "default")
-
-# Start consumer with a specific role (from chronicle.toml)
-[group('routing')]
-consumer-role role="default":
-    ERL_FLAGS="-sname consumer_{{role}} -setcookie {{cookie}}" \
-    CHRONICLE_TRANSPORT=rabbitmq \
-    CHRONICLE_STORE={{store}} \
-    CHRONICLE_CONSUMER_ROLE={{role}} \
-    POSTGRES_HOST={{pg_host}} \
-    POSTGRES_PORT={{pg_port}} \
-    POSTGRES_USER={{pg_user}} \
-    POSTGRES_PASSWORD={{pg_pass}} \
-    POSTGRES_DATABASE={{pg_db}} \
-    gleam run
-
 # Show configured routes from chronicle.toml
 [group('routing')]
 show-routes:
@@ -535,29 +539,34 @@ show-routes:
 show-consumers:
     @cat priv/chronicle.toml | grep -A5 '\[\[consumers\]\]'
 
-# Send a security event (for datatype channel testing)
+# Send a typed event for datatype channel testing
+# Usage: just event=security send
+#        just event=user send
+#        just event=billing send
 [group('routing')]
-send-security-event:
-    @echo "Sending security event..."
-    @curl -s -X POST http://localhost:8080/events \
+send:
+    #!/usr/bin/env bash
+    case "{{event}}" in
+        security)
+            echo "Sending security event..."
+            PAYLOAD='{"actor":"test@example.com","action":"login","resource_type":"session","resource_id":"session-123","event_type":"security.login"}'
+            ;;
+        user)
+            echo "Sending user event..."
+            PAYLOAD='{"actor":"admin@example.com","action":"created","resource_type":"user","resource_id":"user-456","event_type":"user.created"}'
+            ;;
+        billing)
+            echo "Sending billing event..."
+            PAYLOAD='{"actor":"billing@example.com","action":"charge","resource_type":"invoice","resource_id":"inv-789","event_type":"billing.charge"}'
+            ;;
+        *)
+            echo "Sending {{event}} event..."
+            PAYLOAD='{"actor":"test@example.com","action":"test","resource_type":"{{event}}","resource_id":"id-'$RANDOM'","event_type":"{{event}}.test"}'
+            ;;
+    esac
+    curl -s -X POST http://localhost:8080/events \
         -H "Content-Type: application/json" \
-        -d '{"actor":"test@example.com","action":"login","resource_type":"security","resource_id":"session-123","event_type":"security.login"}' | jq .
-
-# Send a user event (for datatype channel testing)
-[group('routing')]
-send-user-event:
-    @echo "Sending user event..."
-    @curl -s -X POST http://localhost:8080/events \
-        -H "Content-Type: application/json" \
-        -d '{"actor":"admin@example.com","action":"created","resource_type":"user","resource_id":"user-456","event_type":"user.created"}' | jq .
-
-# Send a billing event (for datatype channel testing)
-[group('routing')]
-send-billing-event:
-    @echo "Sending billing event..."
-    @curl -s -X POST http://localhost:8080/events \
-        -H "Content-Type: application/json" \
-        -d '{"actor":"billing@example.com","action":"charge","resource_type":"billing","resource_id":"inv-789","event_type":"billing.charge"}' | jq .
+        -d "$PAYLOAD" | jq .
 
 # List all RabbitMQ queues
 [group('routing')]
@@ -579,9 +588,10 @@ list-exchanges:
 info:
     @echo "Chronicle - Audit Logging System"
     @echo ""
-    @echo "Configuration:"
+    @echo "Current Configuration:"
     @echo "  Transport: {{transport}}"
     @echo "  Store:     {{store}}"
+    @echo "  Role:      {{role}}"
     @echo "  Database:  {{database_url}}"
     @echo ""
     @echo "Gleam version:"
@@ -589,20 +599,28 @@ info:
     @echo ""
     @echo "Quick start:"
     @echo "  just setup              - Start services, run migrations"
-    @echo "  just run                - Run the app (postgres by default)"
-    @echo "  just store=ets run      - Run with in-memory ETS store"
+    @echo "  just run                - Run full app (producer + consumer)"
+    @echo "  just producer           - Run producer only (HTTP server)"
+    @echo "  just consumer           - Run single consumer"
+    @echo "  just consumers 3        - Run 3 consumers"
+    @echo ""
+    @echo "Composable variables (combine freely):"
+    @echo "  just transport=rabbitmq run"
+    @echo "  just transport=rabbitmq role=security consumers 3"
+    @echo "  just role=analytics consumers 1"
+    @echo "  just store=ets run"
+    @echo ""
+    @echo "Routing commands:"
+    @echo "  just event=security send  - Send security event"
+    @echo "  just event=user send      - Send user event"
+    @echo "  just event=billing send   - Send billing event"
+    @echo "  just show-routes          - Show configured routes"
+    @echo "  just list-queues          - List RabbitMQ queues"
     @echo ""
     @echo "Migration commands:"
     @echo "  just migrate            - Run all pending migrations"
     @echo "  just migrate-status     - Show migration status"
-    @echo "  just migrate-new NAME   - Create new migration"
-    @echo ""
-    @echo "Database commands:"
-    @echo "  just pg-up              - Start PostgreSQL"
-    @echo "  just pg-shell           - Connect to PostgreSQL CLI"
-    @echo "  just pg-events          - Show recent events"
     @echo ""
     @echo "Debug commands:"
-    @echo "  just shell              - Connect to chronicle node"
-    @echo "  just ets                - List ETS tables on chronicle"
     @echo "  just nodes              - List running Erlang nodes"
+    @echo "  just kill               - Stop all Chronicle processes"

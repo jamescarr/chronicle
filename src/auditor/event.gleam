@@ -117,6 +117,38 @@ pub fn new_with_type(
   )
 }
 
+/// Create an event with all optional fields
+/// Used when receiving events via API with explicit event_type for routing
+pub fn new_with_all_options(
+  id: String,
+  actor: String,
+  action: String,
+  resource_type: String,
+  resource_id: String,
+  timestamp: String,
+  correlation_id: Option(String),
+  entity_key: Option(String),
+  event_type: Option(String),
+) -> AuditEvent {
+  // Use provided event_type or derive from resource_type.action
+  let final_event_type = case event_type {
+    Some(et) -> et
+    None -> derive_event_type(resource_type, action)
+  }
+  AuditEvent(
+    id:,
+    actor:,
+    action:,
+    resource_type:,
+    resource_id:,
+    timestamp:,
+    event_type: Some(final_event_type),
+    correlation_id:,
+    entity_key:,
+    metadata: dict.new(),
+  )
+}
+
 /// Get the routing key for this event
 /// Returns the event_type or a default based on resource_type.action
 pub fn routing_key(event: AuditEvent) -> String {
