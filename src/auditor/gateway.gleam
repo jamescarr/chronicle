@@ -15,6 +15,7 @@
 
 import auditor/channel
 import auditor/config.{type Config, type RabbitConfig, Otp, RabbitMQ}
+import auditor/consumer
 import auditor/event.{type AuditEvent}
 import auditor/log
 import auditor/rabbit
@@ -156,15 +157,14 @@ fn start_rabbit_consumers(
   connection: rabbit.RabbitConnection,
   st: Table,
 ) -> Result(ConsumerPool, String) {
-  let node = node_name()
+  let consumer_name = node_name()
+  let handler =
+    consumer.create_handler(consumer.ConsumerConfig(
+      name: consumer_name,
+      store: st,
+    ))
 
-  rabbit.subscribe(connection, fn(event) {
-    log.info(
-      "[" <> node <> "] Processing " <> event.id <> " - " <> event.action,
-    )
-    let _ = store.insert(st, event)
-    Nil
-  })
+  rabbit.subscribe(connection, handler)
   |> result.map(fn(tag) { RabbitConsumerPool(consumer_tag: tag) })
 }
 
@@ -236,15 +236,7 @@ fn handle_consumer_message(
     Poll -> {
       case channel.receive(state.channel, 50) {
         Ok(event) -> {
-          log.info(
-            "["
-            <> state.name
-            <> "] Processing "
-            <> event.id
-            <> " - "
-            <> event.action,
-          )
-          let _ = store.insert(state.store, event)
+          consumer.ingest(event, state.store, state.name)
           actor.continue(state)
         }
         Error(Nil) -> actor.continue(state)

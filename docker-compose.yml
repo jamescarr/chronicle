@@ -1,10 +1,10 @@
-# Chronicle - RabbitMQ Development Environment
+# Chronicle - Development Environment
 #
-# Start RabbitMQ for local development:
+# Start services for local development:
 #   docker-compose up -d
 #
-# Management UI available at: http://localhost:15672
-# Default credentials: guest/guest
+# RabbitMQ Management UI: http://localhost:15672 (guest/guest)
+# PostgreSQL: localhost:5432 (chronicle/chronicle)
 
 services:
   rabbitmq:
@@ -26,6 +26,25 @@ services:
       retries: 5
       start_period: 10s
 
+  postgres:
+    image: postgres:17-alpine
+    container_name: chronicle-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: chronicle
+      POSTGRES_PASSWORD: chronicle
+      POSTGRES_DB: chronicle
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chronicle -d chronicle"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   rabbitmq_data:
+  postgres_data:
 
