@@ -4,9 +4,9 @@
 
 import auditor/config
 import auditor/entity_store
+import auditor/event_store
 import auditor/gateway
 import auditor/router.{Context}
-import auditor/store
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
@@ -27,7 +27,7 @@ const base_url = "http://localhost:9999"
 
 /// Start the server for testing
 fn start_test_server() -> Nil {
-  let table = store.init()
+  let store = event_store.create_ets()
   let entities = entity_store.init()
 
   // Use default OTP transport for tests
@@ -36,13 +36,13 @@ fn start_test_server() -> Nil {
 
   // Start consumers through the gateway - clean abstraction!
   let consumer_pool =
-    gateway.start_consumers(gateway_result.gateway, 2, table)
+    gateway.start_consumers(gateway_result.gateway, 2, store)
     |> result.replace_error(Nil)
 
   let ctx =
     Context(
       gateway: gateway_result.gateway,
-      store: table,
+      store: store,
       entity_store: entities,
       consumer_pool: consumer_pool,
     )

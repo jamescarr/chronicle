@@ -10,10 +10,10 @@
 import auditor/entity
 import auditor/entity_store.{type EntityTable}
 import auditor/event
+import auditor/event_store.{type EventStore}
 import auditor/filters
 import auditor/gateway.{type ConsumerPool, type Gateway}
 import auditor/log
-import auditor/store.{type Table}
 import birl
 import gleam/dict
 import gleam/dynamic/decode
@@ -28,7 +28,7 @@ import youid/uuid
 pub type Context {
   Context(
     gateway: Gateway,
-    store: Table,
+    store: EventStore,
     entity_store: EntityTable,
     consumer_pool: Result(ConsumerPool, Nil),
   )
@@ -161,7 +161,7 @@ fn create_event(req: WispRequest, ctx: Context) -> WispResponse {
 
 /// GET /events - list all events, hydrated with entity data
 fn list_events(ctx: Context) -> WispResponse {
-  let events = store.list_all(ctx.store)
+  let events = event_store.list_all(ctx.store)
 
   // Hydrate events with current entity data at read time
   let hydrated_events =

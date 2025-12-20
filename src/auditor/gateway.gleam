@@ -17,9 +17,9 @@ import auditor/channel
 import auditor/config.{type Config, type RabbitConfig, Otp, RabbitMQ}
 import auditor/consumer
 import auditor/event.{type AuditEvent}
+import auditor/event_store.{type EventStore}
 import auditor/log
 import auditor/rabbit
-import auditor/store.{type Table}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/list
@@ -122,7 +122,7 @@ pub fn send_event(gateway: Gateway, event: AuditEvent) -> Nil {
 pub fn start_consumers(
   gateway: Gateway,
   count: Int,
-  store: Table,
+  store: EventStore,
 ) -> Result(ConsumerPool, String) {
   case gateway {
     OtpGateway(channel:) -> start_otp_consumers(channel, count, store)
@@ -134,13 +134,13 @@ pub fn start_consumers(
 fn start_otp_consumers(
   ch: Subject(channel.ChannelMessage),
   count: Int,
-  st: Table,
+  store: EventStore,
 ) -> Result(ConsumerPool, String) {
   let consumers =
     list.range(1, count)
     |> list.filter_map(fn(i) {
       let name = "consumer-" <> int.to_string(i)
-      case start_consumer_actor(name, ch, st) {
+      case start_consumer_actor(name, ch, store) {
         Ok(started) -> Ok(started.data)
         Error(_) -> Error(Nil)
       }
@@ -155,13 +155,13 @@ fn start_otp_consumers(
 /// Start RabbitMQ consumer - subscribes to queue with callback
 fn start_rabbit_consumers(
   connection: rabbit.RabbitConnection,
-  st: Table,
+  store: EventStore,
 ) -> Result(ConsumerPool, String) {
   let consumer_name = node_name()
   let handler =
     consumer.create_handler(consumer.ConsumerConfig(
       name: consumer_name,
-      store: st,
+      store: store,
     ))
 
   rabbit.subscribe(connection, handler)
@@ -213,17 +213,17 @@ type ConsumerState {
   ConsumerState(
     name: String,
     channel: Subject(channel.ChannelMessage),
-    store: Table,
+    store: EventStore,
   )
 }
 
 fn start_consumer_actor(
   name: String,
   ch: Subject(channel.ChannelMessage),
-  st: Table,
+  store: EventStore,
 ) -> Result(actor.Started(Subject(ConsumerMessage)), actor.StartError) {
   log.info("Starting consumer: " <> name)
-  actor.new(ConsumerState(name: name, channel: ch, store: st))
+  actor.new(ConsumerState(name: name, channel: ch, store: store))
   |> actor.on_message(handle_consumer_message)
   |> actor.start
 }

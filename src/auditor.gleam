@@ -9,6 +9,10 @@
 //// - Consumer lifecycle is managed through the gateway
 //// - Same code works for both local and distributed deployments
 ////
+//// The Event Store abstracts storage backends:
+//// - Client code doesn't know if we're using ETS or PostgreSQL
+//// - Same code works for in-memory or persistent storage
+////
 //// The Entity Registry supports Pipes and Filters enrichment:
 //// - Register entities via /entities API
 //// - Events can reference entities via entity_key
@@ -16,10 +20,10 @@
 
 import auditor/config
 import auditor/entity_store
+import auditor/event_store
 import auditor/gateway
 import auditor/log
 import auditor/router.{Context}
-import auditor/store
 import gleam/erlang/process
 import gleam/int
 import logging
@@ -37,13 +41,23 @@ pub fn main() -> Nil {
   let cfg = config.load()
   log.info("Transport: " <> config.transport_name(cfg.transport))
   log.info("Mode: " <> config.mode_name(cfg.mode))
+  log.info("Store: " <> config.store_name(cfg.store))
 
   // Start the messaging gateway - abstracts OTP vs RabbitMQ
   let assert Ok(gateway_result) = gateway.start(cfg)
   log.info("Gateway started: " <> gateway_result.transport_name)
 
-  // Initialize storage
-  let store = store.init()
+  // Initialize storage based on configuration
+  let store = case cfg.store {
+    config.Ets -> event_store.create_ets()
+    config.Postgres -> event_store.create_postgres(event_store.PostgresConfig(
+      host: cfg.postgres.host,
+      port: cfg.postgres.port,
+      database: cfg.postgres.database,
+      user: cfg.postgres.user,
+      password: cfg.postgres.password,
+    ))
+  }
   let entities = entity_store.init()
 
   // Start consumers if this endpoint is configured as a consumer

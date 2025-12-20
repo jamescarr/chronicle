@@ -8,6 +8,7 @@
 //// Environment Variables:
 //// - CHRONICLE_TRANSPORT: "otp" (default) or "rabbitmq"
 //// - CHRONICLE_MODE: "full" (default), "producer", or "consumer"
+//// - CHRONICLE_STORE: "ets" (default) or "postgres"
 //// - CHRONICLE_PORT: HTTP server port (default: 8080)
 //// - CHRONICLE_CONSUMER_COUNT: Number of competing consumers (default: 3)
 //// - RABBITMQ_HOST: RabbitMQ host (default: localhost)
@@ -16,6 +17,11 @@
 //// - RABBITMQ_PASS: RabbitMQ password (default: guest)
 //// - RABBITMQ_VHOST: RabbitMQ vhost (default: /)
 //// - RABBITMQ_QUEUE: Queue name (default: chronicle.events)
+//// - POSTGRES_HOST: PostgreSQL host (default: localhost)
+//// - POSTGRES_PORT: PostgreSQL port (default: 5432)
+//// - POSTGRES_DATABASE: PostgreSQL database (default: chronicle)
+//// - POSTGRES_USER: PostgreSQL username (default: chronicle)
+//// - POSTGRES_PASSWORD: PostgreSQL password (default: chronicle)
 
 import envoy
 import gleam/int
@@ -40,6 +46,14 @@ pub type EndpointMode {
   Consumer
 }
 
+/// Storage backend for audit events
+pub type StoreBackend {
+  /// ETS-based in-memory storage (default, no persistence)
+  Ets
+  /// PostgreSQL-based persistent storage
+  Postgres
+}
+
 /// RabbitMQ connection configuration
 pub type RabbitConfig {
   RabbitConfig(
@@ -52,14 +66,27 @@ pub type RabbitConfig {
   )
 }
 
+/// PostgreSQL connection configuration
+pub type PostgresConfig {
+  PostgresConfig(
+    host: String,
+    port: Int,
+    database: String,
+    user: String,
+    password: String,
+  )
+}
+
 /// Main application configuration
 pub type Config {
   Config(
     transport: Transport,
     mode: EndpointMode,
+    store: StoreBackend,
     port: Int,
     consumer_count: Int,
     rabbitmq: RabbitConfig,
+    postgres: PostgresConfig,
   )
 }
 
@@ -69,9 +96,11 @@ pub fn load() -> Config {
   Config(
     transport: load_transport(),
     mode: load_mode(),
+    store: load_store(),
     port: load_port(),
     consumer_count: load_consumer_count(),
     rabbitmq: load_rabbitmq_config(),
+    postgres: load_postgres_config(),
   )
 }
 
@@ -93,6 +122,16 @@ fn load_mode() -> EndpointMode {
     Ok("consumer") -> Consumer
     Ok("cons") -> Consumer
     _ -> Full
+  }
+}
+
+/// Load store backend from CHRONICLE_STORE
+fn load_store() -> StoreBackend {
+  case envoy.get("CHRONICLE_STORE") {
+    Ok("postgres") -> Postgres
+    Ok("pg") -> Postgres
+    Ok("postgresql") -> Postgres
+    _ -> Ets
   }
 }
 
@@ -121,6 +160,19 @@ fn load_rabbitmq_config() -> RabbitConfig {
     password: envoy.get("RABBITMQ_PASS") |> result.unwrap("guest"),
     vhost: envoy.get("RABBITMQ_VHOST") |> result.unwrap("/"),
     queue: envoy.get("RABBITMQ_QUEUE") |> result.unwrap("chronicle.events"),
+  )
+}
+
+/// Load PostgreSQL configuration from environment
+fn load_postgres_config() -> PostgresConfig {
+  PostgresConfig(
+    host: envoy.get("POSTGRES_HOST") |> result.unwrap("localhost"),
+    port: envoy.get("POSTGRES_PORT")
+      |> result.try(int.parse)
+      |> result.unwrap(5432),
+    database: envoy.get("POSTGRES_DATABASE") |> result.unwrap("chronicle"),
+    user: envoy.get("POSTGRES_USER") |> result.unwrap("chronicle"),
+    password: envoy.get("POSTGRES_PASSWORD") |> result.unwrap("chronicle"),
   )
 }
 
@@ -176,4 +228,24 @@ pub fn rabbitmq_connection_string(rabbit: RabbitConfig) -> String {
   <> ":"
   <> int.to_string(rabbit.port)
   <> rabbit.vhost
+}
+
+/// Get a human-readable description of the store backend
+pub fn store_name(store: StoreBackend) -> String {
+  case store {
+    Ets -> "ETS (in-memory)"
+    Postgres -> "PostgreSQL"
+  }
+}
+
+/// Format PostgreSQL connection string (for logging, masks password)
+pub fn postgres_connection_string(pg: PostgresConfig) -> String {
+  "postgres://"
+  <> pg.user
+  <> ":***@"
+  <> pg.host
+  <> ":"
+  <> int.to_string(pg.port)
+  <> "/"
+  <> pg.database
 }

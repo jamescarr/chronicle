@@ -4,6 +4,9 @@
 //// This module is transport-agnostic - it doesn't care if messages
 //// come from OTP channels or RabbitMQ.
 ////
+//// This module is also storage-agnostic - it uses the EventStore
+//// abstraction, so it doesn't care if events are stored in ETS or PostgreSQL.
+////
 //// From Enterprise Integration Patterns:
 //// > A Message Endpoint is a client of the messaging system that
 //// > sends and receives messages.
@@ -12,8 +15,8 @@
 //// persisting them to storage.
 
 import auditor/event.{type AuditEvent}
+import auditor/event_store.{type EventStore}
 import auditor/log
-import auditor/store.{type Table}
 
 // =============================================================================
 // Types
@@ -26,7 +29,7 @@ pub type EventHandler =
 
 /// Consumer configuration
 pub type ConsumerConfig {
-  ConsumerConfig(name: String, store: Table)
+  ConsumerConfig(name: String, store: EventStore)
 }
 
 // =============================================================================
@@ -47,16 +50,16 @@ pub fn process_event(event: AuditEvent, config: ConsumerConfig) -> Nil {
   log.info(
     "[" <> config.name <> "] Processing " <> event.id <> " - " <> event.action,
   )
-  let _ = store.insert(config.store, event)
+  let _ = event_store.insert(config.store, event)
   Nil
 }
 
 /// Simplified processing function when you just have a store and name
-pub fn ingest(event: AuditEvent, st: Table, consumer_name: String) -> Nil {
+pub fn ingest(event: AuditEvent, store: EventStore, consumer_name: String) -> Nil {
   log.info(
     "[" <> consumer_name <> "] Processing " <> event.id <> " - " <> event.action,
   )
-  let _ = store.insert(st, event)
+  let _ = event_store.insert(store, event)
   Nil
 }
 
