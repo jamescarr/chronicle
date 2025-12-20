@@ -194,57 +194,59 @@ pub fn publish(conn: RabbitConnection, evt: AuditEvent) -> Result(Nil, String) {
 }
 
 /// Subscribe to a specific queue (for consumer roles)
+/// Note: carotte's AutoAck(True) means auto-ack is enabled (no manual ack needed)
 pub fn subscribe_to_queue(
   conn: RabbitConnection,
   queue_name: String,
   callback: fn(AuditEvent) -> Nil,
 ) -> Result(String, String) {
-  // Set QoS prefetch=1 for fair dispatch
+  // Set QoS prefetch for fair dispatch (higher for throughput)
   let Channel(pid: channel_pid) = conn.channel
-  let _ = set_prefetch(channel_pid, 1)
+  let _ = set_prefetch(channel_pid, 10)
 
+  // AutoAck(True) = server auto-acknowledges on delivery
+  // This is simpler and avoids ack-related issues
   queue.subscribe_with_options(
     channel: conn.channel,
     queue: queue_name,
     options: [queue.AutoAck(True)],
-    callback: fn(payload, deliver) {
+    callback: fn(payload, _deliver) {
       case json_to_event(payload.payload) {
         Ok(evt) -> callback(evt)
         Error(_) ->
           log.error("Failed to parse event from queue: " <> payload.payload)
       }
-      let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
-      Nil
     },
   )
   |> result.map_error(fn(e) {
-    "Failed to subscribe to " <> queue_name <> ": " <> carotte_error_to_string(e)
+    "Failed to subscribe to "
+    <> queue_name
+    <> ": "
+    <> carotte_error_to_string(e)
   })
 }
 
 /// Subscribe to the queue and process events with a callback
-/// Uses prefetch=1 and manual ack for fair dispatch among competing consumers
+/// Uses auto-ack for simpler message handling
 pub fn subscribe(
   conn: RabbitConnection,
   callback: fn(AuditEvent) -> Nil,
 ) -> Result(String, String) {
-  // Set QoS prefetch=1 for fair dispatch
+  // Set QoS prefetch for fair dispatch
   let Channel(pid: channel_pid) = conn.channel
-  let _ = set_prefetch(channel_pid, 1)
+  let _ = set_prefetch(channel_pid, 10)
 
-  // Manual ack mode (AutoAck(True) = "I will ack manually")
+  // AutoAck(True) = server auto-acknowledges on delivery
   queue.subscribe_with_options(
     channel: conn.channel,
     queue: conn.queue_name,
     options: [queue.AutoAck(True)],
-    callback: fn(payload, deliver) {
+    callback: fn(payload, _deliver) {
       case json_to_event(payload.payload) {
         Ok(event) -> callback(event)
         Error(_) ->
           log.error("Failed to parse event from queue: " <> payload.payload)
       }
-      let _ = queue.ack_single(conn.channel, deliver.delivery_tag)
-      Nil
     },
   )
   |> result.map_error(fn(e) {
@@ -297,14 +299,14 @@ fn json_to_event(payload: String) -> Result(AuditEvent, Nil) {
           et,
         ))
       None ->
-    decode.success(event.new(
-      id,
-      actor,
-      action,
-      resource_type,
-      resource_id,
-      timestamp,
-    ))
+        decode.success(event.new(
+          id,
+          actor,
+          action,
+          resource_type,
+          resource_id,
+          timestamp,
+        ))
     }
   }
   json.parse(payload, decoder)
